@@ -1,0 +1,10 @@
+[remote "neovim"]
+    url = https://github.com/neovim/neovim.git
+    fetch = +refs/heads/*:refs/remotes/neovim/*
+[gsync]
+    remote = neovim
+    branch = master
+[merge]
+	allow = true
+[commit]
+	message = n
