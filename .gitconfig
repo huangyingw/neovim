@@ -1,6 +1,11 @@
 [remote "neovim"]
     url = https://github.com/neovim/neovim.git
     fetch = +refs/heads/*:refs/remotes/neovim/*
+[remote "github"]
+    url = git@github.com:huangyingw/neovim.git
+    fetch = +refs/heads/*:refs/remotes/github/*
+[push]
+    remote = github
 [gsync]
     remote = neovim
     branch = master
