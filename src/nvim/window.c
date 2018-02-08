@@ -540,7 +540,7 @@ int win_split(int size, int flags)
   else
     clear_snapshot(curtab, SNAP_HELP_IDX);
 
-  return win_split_ins(size, flags, NULL, 0);
+  return win_split_ins(9999999999, flags, NULL, 0);
 }
 
 /*
@@ -2026,7 +2026,8 @@ int win_close(win_T *win, int free_buf)
   if (p_ea && (*p_ead == 'b' || *p_ead == dir)) {
     // If the frame of the closed window contains the new current window,
     // only resize that frame.  Otherwise resize all windows.
-    win_equal(curwin, curwin->w_frame->fr_parent == win_frame, dir);
+    //win_equal(curwin, curwin->w_frame->fr_parent == win_frame, dir);
+    curwin=curwin;
   } else {
     win_comp_pos();
   }
