@@ -24,3 +24,7 @@ apt-get install -y \
 make \
     && make install \
     && ~/loadrc/gitrc/gci.sh
+
+pip install --upgrade neovim
+pip2 install --upgrade neovim
+pip3 install --upgrade neovim
