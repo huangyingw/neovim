@@ -1,6 +1,5 @@
 " Tests for editing the command line.
 
-set belloff=all
 
 func Test_complete_tab()
   call writefile(['testfile'], 'Xtestfile')
@@ -375,7 +374,7 @@ func Test_getcmdtype()
   call feedkeys("?MyCmd a\<C-R>=Check_cmdline('?')\<CR>\<Esc>", "xt")
 
   call feedkeys(":call input('Answer?')\<CR>", "t")
-  call feedkeys("MyCmd a\<C-R>=Check_cmdline('@')\<CR>\<Esc>", "xt")
+  call feedkeys("MyCmd a\<C-R>=Check_cmdline('@')\<CR>\<C-C>", "xt")
 
   call feedkeys(":insert\<CR>MyCmd a\<C-R>=Check_cmdline('-')\<CR>\<Esc>", "xt")
 
