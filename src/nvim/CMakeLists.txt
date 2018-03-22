@@ -175,7 +175,7 @@ endif()
 
 get_directory_property(gen_cdefs COMPILE_DEFINITIONS)
 foreach(gen_cdef ${gen_cdefs} DO_NOT_DEFINE_EMPTY_ATTRIBUTES)
-  if(NOT "${gen_cdef}" MATCHES "INCLUDE_GENERATED_DECLARATIONS")
+  if(NOT ${gen_cdef} MATCHES "INCLUDE_GENERATED_DECLARATIONS")
     list(APPEND gen_cflags "-D${gen_cdef}")
   endif()
 endforeach()
@@ -455,6 +455,8 @@ if(WIN32)
     COMMAND ${CMAKE_COMMAND} -E copy "${DEPS_PREFIX}/bin/platforms/qwindows.dll" ${PROJECT_BINARY_DIR}/windows_runtime_deps/platforms/
     )
   add_dependencies(nvim_runtime_deps external_blobs)
+else()
+  add_custom_target(nvim_runtime_deps)  # Stub target to avoid CMP0046.
 endif()
 
 add_library(
