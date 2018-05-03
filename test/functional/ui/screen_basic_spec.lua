@@ -76,11 +76,26 @@ describe('Screen', function()
       local function check()
         eq(true, screen.suspended)
       end
+
+      command('let g:ev = []')
+      command('autocmd VimResume  * :call add(g:ev, "r")')
+      command('autocmd VimSuspend * :call add(g:ev, "s")')
+
+      eq(false, screen.suspended)
       command('suspend')
+      eq({ 's', 'r' }, eval('g:ev'))
+
       screen:expect(check)
       screen.suspended = false
+
       feed('<c-z>')
+      eq({ 's', 'r', 's', 'r' }, eval('g:ev'))
+
       screen:expect(check)
+      screen.suspended = false
+
+      command('suspend')
+      eq({ 's', 'r', 's', 'r', 's', 'r' }, eval('g:ev'))
     end)
   end)
 
@@ -355,7 +370,8 @@ describe('Screen', function()
       ]])
     end)
 
-    it('execute command with multi-line output', function()
+    it('execute command with multi-line output without msgsep', function()
+      command("set display-=msgsep")
       feed(':ls<cr>')
       screen:expect([[
         {0:~                                                    }|
@@ -369,6 +385,28 @@ describe('Screen', function()
         {0:~                                                    }|
         {0:~                                                    }|
         {0:~                                                    }|
+        :ls                                                  |
+          1 %a   "[No Name]"                    line 1       |
+        {7:Press ENTER or type command to continue}^              |
+      ]])
+      feed('<cr>') --  skip the "Press ENTER..." state or tests will hang
+    end)
+
+    it('execute command with multi-line output and with msgsep', function()
+      command("set display+=msgsep")
+      feed(':ls<cr>')
+      screen:expect([[
+                                                             |
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {1:                                                     }|
         :ls                                                  |
           1 %a   "[No Name]"                    line 1       |
         {7:Press ENTER or type command to continue}^              |
@@ -573,6 +611,7 @@ describe('Screen', function()
       command('nnoremap <F1> :echo "TEST"<CR>')
       feed(':ls<CR>')
       screen:expect([[
+                                                             |
         {0:~                                                    }|
         {0:~                                                    }|
         {0:~                                                    }|
@@ -582,8 +621,7 @@ describe('Screen', function()
         {0:~                                                    }|
         {0:~                                                    }|
         {0:~                                                    }|
-        {0:~                                                    }|
-        {0:~                                                    }|
+        {1:                                                     }|
         :ls                                                  |
           1 %a   "[No Name]"                    line 1       |
         {7:Press ENTER or type command to continue}^              |
@@ -606,23 +644,5 @@ describe('Screen', function()
         TEST                                                 |
       ]])
     end)
-  end)
-end)
-
-describe('nvim_ui_attach()', function()
-  before_each(function()
-    clear()
-  end)
-  it('handles very large width/height #2180', function()
-    local screen = Screen.new(999, 999)
-    screen:attach()
-    eq(999, eval('&lines'))
-    eq(999, eval('&columns'))
-  end)
-  it('invalid option returns error', function()
-    local screen = Screen.new()
-    local status, rv = pcall(function() screen:attach({foo={'foo'}}) end)
-    eq(false, status)
-    eq('No such ui option', rv:match("No such .*"))
   end)
 end)

@@ -2036,6 +2036,11 @@ A jump table for the options with a short description can be found at |Q_op|.
 			column of the last screen line.  Overrules "lastline".
 	uhex		Show unprintable characters hexadecimal as <xx>
 			instead of using ^C and ~C.
+	msgsep		When showing messages longer than 'cmdheight' lines,
+			only scroll the message lines and not the entire
+			screen. This also shows a separator line filled with
+			chars determined by 'fillchars' option, and
+			highlighted with the |MsgSeparator| group.
 
 	When neither "lastline" nor "truncate" is included, a last line that
 	doesn't fit is replaced with "@" lines.
@@ -2390,6 +2395,7 @@ A jump table for the options with a short description can be found at |Q_op|.
 	  vert:c	'│' or '|'	vertical separators |:vsplit|
 	  fold:c	'·' or '-'	filling 'foldtext'
 	  diff:c	'-'		deleted lines of the 'diff' option
+	  msgsep:c	' '		message separator 'display'
 
 	Any one that is omitted will fall back to the default.  For "stl" and
 	"stlnc" the space will be used when there is highlighting, '^' or '='
@@ -2684,17 +2690,19 @@ A jump table for the options with a short description can be found at |Q_op|.
 	security reasons.
 
 						*'fsync'* *'fs'*
-'fsync' 'fs'		boolean	(default on)
+'fsync' 'fs'		boolean	(default off)
 			global
-	When on, the library function fsync() will be called after writing a
-	file.  This will flush a file to disk, ensuring that it is safely
-	written even on filesystems which do metadata-only journaling.  This
-	will force the harddrive to spin up on Linux systems running in laptop
-	mode, so it may be undesirable in some situations.  Be warned that
-	turning this off increases the chances of data loss after a crash.
+	When on, the OS function fsync() will be called after saving a file
+	(|:write|, |writefile()|, …), |swap-file| and |shada-file|. This
+	flushes the file to disk, ensuring that it is safely written.
+	Slow on some systems: writing buffers, quitting Nvim, and other
+	operations may sometimes take a few seconds.
 
-	Currently applies only to writing the buffer with e.g. |:w| and 
-	|writefile()|.
+	Files are ALWAYS flushed ('fsync' is ignored) when:
+	- |CursorHold| event is triggered
+	- |:preserve| is called
+	- system signals low battery life
+	- Nvim exits abnormally
 
 				   *'gdefault'* *'gd'* *'nogdefault'* *'nogd'*
 'gdefault' 'gd'		boolean	(default off)
@@ -3916,16 +3924,6 @@ A jump table for the options with a short description can be found at |Q_op|.
 	because the 'w' is used before the next mapping is done.  See also
 	|key-mapping|.
 
-						*'maxmem'* *'mm'*
-'maxmem' 'mm'		number	(default between 256 to 5120 (system
-				 dependent) or half the amount of memory
-				 available)
-			global
-	Maximum amount of memory (in Kbyte) to use for one buffer.  When this
-	limit is reached allocating extra memory for a buffer will cause
-	other memory to be freed.  The maximum usable value is about 2000000.
-	Use this to work without a limit.  Also see 'maxmemtot'.
-
 						*'maxmempattern'* *'mmp'*
 'maxmempattern' 'mmp'	number	(default 1000)
 			global
@@ -3938,20 +3936,6 @@ A jump table for the options with a short description can be found at |Q_op|.
 	inefficient or too complex.  This may already happen with the pattern
 	"\(.\)*" on a very long line.  ".*" works much better.
 	Vim may run out of memory before hitting the 'maxmempattern' limit.
-
-						*'maxmemtot'* *'mmt'*
-'maxmemtot' 'mmt'	number	(default between 2048 and 10240 (system
-				 dependent) or half the amount of memory
-				 available)
-			global
-	Maximum amount of memory in Kbyte to use for all buffers together.
-	The maximum usable value is about 2000000 (2 Gbyte).  Use this to work
-	without a limit.
-	On 64 bit machines higher values might work.  But hey, do you really
-	need more than 2 Gbyte for text editing?  Keep in mind that text is
-	stored in the swap file, one can edit files > 2 Gbyte anyway.  We do
-	need the memory to store undo info.
-	Also see 'maxmem'.
 
 						*'menuitems'* *'mis'*
 'menuitems' 'mis'	number	(default 25)
@@ -5160,10 +5144,10 @@ A jump table for the options with a short description can be found at |Q_op|.
 	security reasons.
 
 						*'shellcmdflag'* *'shcf'*
-'shellcmdflag' 'shcf'	string	(default: "-c"; Windows: "/c")
+'shellcmdflag' 'shcf'	string	(default: "-c"; Windows: "/s /c")
 			global
 	Flag passed to the shell to execute "!" and ":!" commands; e.g.,
-	"bash.exe -c ls" or "cmd.exe /c dir".  For Windows
+	`bash.exe -c ls` or `cmd.exe /s /c "dir"`.  For Windows
 	systems, the default is set according to the value of 'shell', to
 	reduce the need to set this option by the user.
 	On Unix it can have more than one flag.  Each white space separated
@@ -5284,7 +5268,7 @@ A jump table for the options with a short description can be found at |Q_op|.
 	to execute most external commands with cmd.exe.
 
 						*'shellxquote'* *'sxq'*
-'shellxquote' 'sxq'	string	(default: "")
+'shellxquote' 'sxq'	string	(default: "", Windows: "\"")
 			global
 	Quoting character(s), put around the command passed to the shell, for
 	the "!" and ":!" commands.  Includes the redirection.  See
@@ -6284,15 +6268,14 @@ A jump table for the options with a short description can be found at |Q_op|.
 						*'timeoutlen'* *'tm'*
 'timeoutlen' 'tm'	number	(default 1000)
 			global
-	The time in milliseconds that is waited for a mapped sequence to
-	complete.
+	Time in milliseconds to wait for a mapped sequence to complete.
 
 						*'ttimeoutlen'* *'ttm'*
 'ttimeoutlen' 'ttm'	number	(default 50)
 			global
-	The time in milliseconds that is waited for a key code
-	sequence to complete. Also used for CTRL-\ CTRL-N and CTRL-\ CTRL-G
-	when part of a command has been typed.
+	Time in milliseconds to wait for a key code sequence to complete. Also
+	used for CTRL-\ CTRL-N and CTRL-\ CTRL-G when part of a command has
+	been typed.
 
 						*'title'* *'notitle'*
 'title'			boolean	(default off)

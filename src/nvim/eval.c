@@ -2682,19 +2682,21 @@ void ex_call(exarg_T *eap)
     return;
   }
 
-  tofree = trans_function_name(&arg, eap->skip, TFN_INT, &fudi, &partial);
+  tofree = trans_function_name(&arg, false, TFN_INT, &fudi, &partial);
   if (fudi.fd_newkey != NULL) {
-    /* Still need to give an error message for missing key. */
+    // Still need to give an error message for missing key.
     EMSG2(_(e_dictkey), fudi.fd_newkey);
     xfree(fudi.fd_newkey);
   }
-  if (tofree == NULL)
+  if (tofree == NULL) {
     return;
+  }
 
-  /* Increase refcount on dictionary, it could get deleted when evaluating
-   * the arguments. */
-  if (fudi.fd_dict != NULL)
-    ++fudi.fd_dict->dv_refcount;
+  // Increase refcount on dictionary, it could get deleted when evaluating
+  // the arguments.
+  if (fudi.fd_dict != NULL) {
+    fudi.fd_dict->dv_refcount++;
+  }
 
   // If it is the name of a variable of type VAR_FUNC or VAR_PARTIAL use its
   // contents. For VAR_PARTIAL get its partial, unless we already have one
@@ -2703,8 +2705,8 @@ void ex_call(exarg_T *eap)
   name = deref_func_name((const char *)tofree, &len,
                          partial != NULL ? NULL : &partial, false);
 
-  /* Skip white space to allow ":call func ()".  Not good, but required for
-   * backward compatibility. */
+  // Skip white space to allow ":call func ()".  Not good, but required for
+  // backward compatibility.
   startarg = skipwhite(arg);
   rettv.v_type = VAR_UNKNOWN;  // tv_clear() uses this.
 
@@ -2713,20 +2715,9 @@ void ex_call(exarg_T *eap)
     goto end;
   }
 
-  /*
-   * When skipping, evaluate the function once, to find the end of the
-   * arguments.
-   * When the function takes a range, this is discovered after the first
-   * call, and the loop is broken.
-   */
-  if (eap->skip) {
-    emsg_skip++;
-    lnum = eap->line2;  // Do it once, also with an invalid range.
-  } else {
-    lnum = eap->line1;
-  }
+  lnum = eap->line1;
   for (; lnum <= eap->line2; lnum++) {
-    if (!eap->skip && eap->addr_count > 0) {  // -V560
+    if (eap->addr_count > 0) {  // -V560
       curwin->w_cursor.lnum = lnum;
       curwin->w_cursor.col = 0;
       curwin->w_cursor.coladd = 0;
@@ -2734,40 +2725,40 @@ void ex_call(exarg_T *eap)
     arg = startarg;
     if (get_func_tv(name, (int)STRLEN(name), &rettv, &arg,
                     eap->line1, eap->line2, &doesrange,
-                    !eap->skip, partial, fudi.fd_dict) == FAIL) {
+                    true, partial, fudi.fd_dict) == FAIL) {
       failed = true;
       break;
     }
 
     // Handle a function returning a Funcref, Dictionary or List.
-    if (handle_subscript((const char **)&arg, &rettv, !eap->skip, true)
+    if (handle_subscript((const char **)&arg, &rettv, true, true)
         == FAIL) {
       failed = true;
       break;
     }
 
     tv_clear(&rettv);
-    if (doesrange || eap->skip) {  // -V560
+    if (doesrange) {
       break;
     }
 
-    /* Stop when immediately aborting on error, or when an interrupt
-     * occurred or an exception was thrown but not caught.
-     * get_func_tv() returned OK, so that the check for trailing
-     * characters below is executed. */
-    if (aborting())
+    // Stop when immediately aborting on error, or when an interrupt
+    // occurred or an exception was thrown but not caught.
+    // get_func_tv() returned OK, so that the check for trailing
+    // characters below is executed.
+    if (aborting()) {
       break;
+    }
   }
-  if (eap->skip)
-    --emsg_skip;
 
   if (!failed) {
-    /* Check for trailing illegal characters and a following command. */
+    // Check for trailing illegal characters and a following command.
     if (!ends_excmd(*arg)) {
       emsg_severe = TRUE;
       EMSG(_(e_trailing));
-    } else
+    } else {
       eap->nextcmd = check_nextcmd(arg);
+    }
   }
 
 end:
@@ -5807,8 +5798,8 @@ static int get_lambda_tv(char_u **arg, typval_T *rettv, bool evaluate)
     lambda_no++;
     snprintf((char *)name, sizeof(name), "<lambda>%d", lambda_no);
 
-    fp = (ufunc_T *)xcalloc(1, sizeof(ufunc_T) + STRLEN(name));
-    pt = (partial_T *)xcalloc(1, sizeof(partial_T));
+    fp = xcalloc(1, offsetof(ufunc_T, uf_name) + STRLEN(name) + 1);
+    pt = xcalloc(1, sizeof(partial_T));
 
     ga_init(&newlines, (int)sizeof(char_u *), 1);
     ga_grow(&newlines, 1);
@@ -13496,7 +13487,7 @@ static void f_resolve(typval_T *argvars, typval_T *rettv, FunPtr fptr)
           q[-1] = NUL;
           q = (char *)path_tail((char_u *)p);
         }
-        if (q > p && !path_is_absolute_path((const char_u *)buf)) {
+        if (q > p && !path_is_absolute((const char_u *)buf)) {
           // Symlink is relative to directory of argument. Replace the
           // symlink with the resolved name in the same directory.
           const size_t p_len = strlen(p);
@@ -13814,7 +13805,7 @@ static void f_rpcrequest(typval_T *argvars, typval_T *rettv, FunPtr fptr)
   scid_T save_current_SID;
   uint8_t *save_sourcing_name, *save_autocmd_fname, *save_autocmd_match;
   linenr_T save_sourcing_lnum;
-  int save_autocmd_fname_full, save_autocmd_bufnr;
+  int save_autocmd_bufnr;
   void *save_funccalp;
 
   if (l_provider_call_nesting) {
@@ -13825,16 +13816,14 @@ static void f_rpcrequest(typval_T *argvars, typval_T *rettv, FunPtr fptr)
     save_sourcing_lnum = sourcing_lnum;
     save_autocmd_fname = autocmd_fname;
     save_autocmd_match = autocmd_match;
-    save_autocmd_fname_full = autocmd_fname_full;
     save_autocmd_bufnr = autocmd_bufnr;
     save_funccalp = save_funccal();
-    //
+
     current_SID = provider_caller_scope.SID;
     sourcing_name = provider_caller_scope.sourcing_name;
     sourcing_lnum = provider_caller_scope.sourcing_lnum;
     autocmd_fname = provider_caller_scope.autocmd_fname;
     autocmd_match = provider_caller_scope.autocmd_match;
-    autocmd_fname_full = provider_caller_scope.autocmd_fname_full;
     autocmd_bufnr = provider_caller_scope.autocmd_bufnr;
     restore_funccal(provider_caller_scope.funccalp);
   }
@@ -13850,7 +13839,6 @@ static void f_rpcrequest(typval_T *argvars, typval_T *rettv, FunPtr fptr)
     sourcing_lnum = save_sourcing_lnum;
     autocmd_fname = save_autocmd_fname;
     autocmd_match = save_autocmd_match;
-    autocmd_fname_full = save_autocmd_fname_full;
     autocmd_bufnr = save_autocmd_bufnr;
     restore_funccal(save_funccalp);
   }
@@ -14406,8 +14394,11 @@ static void f_serverstop(typval_T *argvars, typval_T *rettv, FunPtr fptr)
     return;
   }
 
+  rettv->v_type = VAR_NUMBER;
+  rettv->vval.v_number = 0;
   if (argvars[0].vval.v_string) {
-    server_stop((char *) argvars[0].vval.v_string);
+    bool rv = server_stop((char *)argvars[0].vval.v_string);
+    rettv->vval.v_number = (rv ? 1 : 0);
   }
 }
 
@@ -15456,7 +15447,7 @@ static void do_sort_uniq(typval_T *argvars, typval_T *rettv, bool sort)
            ; li != NULL;) {
         listitem_T *const prev_li = TV_LIST_ITEM_PREV(l, li);
         if (item_compare_func_ptr(&prev_li, &li) == 0) {
-          if (info.item_compare_func_err) {
+          if (info.item_compare_func_err) {  // -V547
             EMSG(_("E882: Uniq compare function failed"));
             break;
           }
@@ -15630,7 +15621,6 @@ f_spellsuggest_return:
 
 static void f_split(typval_T *argvars, typval_T *rettv, FunPtr fptr)
 {
-  regmatch_T regmatch;
   char_u      *save_cpo;
   int match;
   colnr_T col = 0;
@@ -15663,9 +15653,13 @@ static void f_split(typval_T *argvars, typval_T *rettv, FunPtr fptr)
     return;
   }
 
-  regmatch.regprog = vim_regcomp((char_u *)pat, RE_MAGIC + RE_STRING);
+  regmatch_T regmatch = {
+    .regprog = vim_regcomp((char_u *)pat, RE_MAGIC + RE_STRING),
+    .startp = { NULL },
+    .endp = { NULL },
+    .rm_ic = false,
+  };
   if (regmatch.regprog != NULL) {
-    regmatch.rm_ic = FALSE;
     while (*str != NUL || keepempty) {
       if (*str == NUL) {
         match = false;  // Empty item at the end.
@@ -15684,8 +15678,9 @@ static void f_split(typval_T *argvars, typval_T *rettv, FunPtr fptr)
                                      && end < (const char *)regmatch.endp[0])) {
         tv_list_append_string(rettv->vval.v_list, str, end - str);
       }
-      if (!match)
+      if (!match) {
         break;
+      }
       // Advance to just after the match.
       if (regmatch.endp[0] > (char_u *)str) {
         col = 0;
@@ -15700,6 +15695,56 @@ static void f_split(typval_T *argvars, typval_T *rettv, FunPtr fptr)
   }
 
   p_cpo = save_cpo;
+}
+
+/// "stdpath()" helper for list results
+static void get_xdg_var_list(const XDGVarType xdg, typval_T *rettv)
+  FUNC_ATTR_NONNULL_ALL
+{
+  const void *iter = NULL;
+  list_T *const list = tv_list_alloc(kListLenShouldKnow);
+  rettv->v_type = VAR_LIST;
+  rettv->vval.v_list = list;
+  tv_list_ref(list);
+  char *const dirs = stdpaths_get_xdg_var(xdg);
+  do {
+    size_t dir_len;
+    const char *dir;
+    iter = vim_env_iter(':', dirs, iter, &dir, &dir_len);
+    if (dir != NULL && dir_len > 0) {
+      char *dir_with_nvim = xmemdupz(dir, dir_len);
+      dir_with_nvim = concat_fnames_realloc(dir_with_nvim, "nvim", true);
+      tv_list_append_string(list, dir_with_nvim, strlen(dir_with_nvim));
+      xfree(dir_with_nvim);
+    }
+  } while (iter != NULL);
+  xfree(dirs);
+}
+
+/// "stdpath(type)" function
+static void f_stdpath(typval_T *argvars, typval_T *rettv, FunPtr fptr)
+{
+  rettv->v_type = VAR_STRING;
+  rettv->vval.v_string = NULL;
+
+  const char *const p = tv_get_string_chk(&argvars[0]);
+  if (p == NULL) {
+    return;  // Type error; errmsg already given.
+  }
+
+  if (strcmp(p, "config") == 0) {
+    rettv->vval.v_string = (char_u *)get_xdg_home(kXDGConfigHome);
+  } else if (strcmp(p, "data") == 0) {
+    rettv->vval.v_string = (char_u *)get_xdg_home(kXDGDataHome);
+  } else if (strcmp(p, "cache") == 0) {
+    rettv->vval.v_string = (char_u *)get_xdg_home(kXDGCacheHome);
+  } else if (strcmp(p, "config_dirs") == 0) {
+    get_xdg_var_list(kXDGConfigDirs, rettv);
+  } else if (strcmp(p, "data_dirs") == 0) {
+    get_xdg_var_list(kXDGDataDirs, rettv);
+  } else {
+    EMSG2(_("E6100: \"%s\" is not a valid stdpath"), p);
+  }
 }
 
 /*
@@ -16093,7 +16138,7 @@ static void f_strridx(typval_T *argvars, typval_T *rettv, FunPtr fptr)
 static void f_strtrans(typval_T *argvars, typval_T *rettv, FunPtr fptr)
 {
   rettv->v_type = VAR_STRING;
-  rettv->vval.v_string = transstr((char_u *)tv_get_string(&argvars[0]));
+  rettv->vval.v_string = (char_u *)transstr(tv_get_string(&argvars[0]));
 }
 
 /*
@@ -16864,6 +16909,12 @@ static void f_timer_pause(typval_T *argvars, typval_T *unused, FunPtr fptr)
   int paused = (bool)tv_get_number(&argvars[1]);
   timer_T *timer = pmap_get(uint64_t)(timers, tv_get_number(&argvars[0]));
   if (timer != NULL) {
+    if (!timer->paused && paused) {
+      time_watcher_stop(&timer->tw);
+    } else if (timer->paused && !paused) {
+      time_watcher_start(&timer->tw, timer_due_cb, timer->timeout,
+                         timer->timeout);
+    }
     timer->paused = paused;
   }
 }
@@ -18725,7 +18776,7 @@ static hashtab_T *find_var_ht_dict(const char *name, const size_t name_len,
   if (name_len == 0) {
     return NULL;
   }
-  if (name_len == 1 || (name_len >= 2 && name[1] != ':')) {
+  if (name_len == 1 || name[1] != ':') {
     // name has implicit scope
     if (name[0] == ':' || name[0] == AUTOLOAD_CHAR) {
       // The name must not start with a colon or #.
@@ -20056,7 +20107,7 @@ void ex_function(exarg_T *eap)
       }
     }
 
-    fp = xcalloc(1, sizeof(ufunc_T) + STRLEN(name));
+    fp = xcalloc(1, offsetof(ufunc_T, uf_name) + STRLEN(name) + 1);
 
     if (fudi.fd_dict != NULL) {
       if (fudi.fd_di == NULL) {
@@ -20811,8 +20862,9 @@ char_u *get_user_func_name(expand_T *xp, int idx)
       return (char_u *)"";       // don't show dict and lambda functions
     }
 
-    if (STRLEN(fp->uf_name) + 4 >= IOSIZE)
-      return fp->uf_name;       /* prevents overflow */
+    if (STRLEN(fp->uf_name) + 4 >= IOSIZE) {
+      return fp->uf_name;  // Prevent overflow.
+    }
 
     cat_func_name(IObuff, fp);
     if (xp->xp_context != EXPAND_USER_FUNC) {
@@ -22448,7 +22500,6 @@ typval_T eval_call_provider(char *provider, char *method, list_T *arguments)
     .sourcing_lnum = sourcing_lnum,
     .autocmd_fname = autocmd_fname,
     .autocmd_match = autocmd_match,
-    .autocmd_fname_full = autocmd_fname_full,
     .autocmd_bufnr = autocmd_bufnr,
     .funccalp = save_funccal()
   };
@@ -22481,7 +22532,8 @@ typval_T eval_call_provider(char *provider, char *method, list_T *arguments)
   restore_funccal(provider_caller_scope.funccalp);
   provider_caller_scope = saved_provider_caller_scope;
   provider_call_nesting--;
-  
+  assert(provider_call_nesting >= 0);
+
   return rettv;
 }
 

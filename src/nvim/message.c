@@ -487,9 +487,6 @@ int emsg(const char_u *s_)
   }
 
   called_emsg = true;
-  if (emsg_silent == 0) {
-    ex_exitval = 1;
-  }
 
   // If "emsg_severe" is TRUE: When an error exception is to be thrown,
   // prefer this message over previous messages for the same command.
@@ -539,6 +536,8 @@ int emsg(const char_u *s_)
       }
       return true;
     }
+
+    ex_exitval = 1;
 
     // Reset msg_silent, an error causes messages to be switched back on.
     msg_silent = 0;
@@ -1383,9 +1382,6 @@ const char *str2special(const char **const sp, const bool replace_spaces,
     if (c == K_SPECIAL && str[1] != NUL && str[2] != NUL) {
       c = TO_SPECIAL((uint8_t)str[1], (uint8_t)str[2]);
       str += 2;
-      if (c == KS_ZERO) {  // display <Nul> as ^@ or <Nul>
-        c = NUL;
-      }
     }
     if (IS_SPECIAL(c) || modifiers) {  // Special key.
       special = true;
@@ -1416,7 +1412,7 @@ const char *str2special(const char **const sp, const bool replace_spaces,
       || (replace_lt && c == '<')) {
     return (const char *)get_special_key_name(c, modifiers);
   }
-  buf[0] = c;
+  buf[0] = (char)c;
   buf[1] = NUL;
   return buf;
 }
@@ -1876,13 +1872,29 @@ bool message_filtered(char_u *msg)
   return cmdmod.filter_force ? match : !match;
 }
 
+/// including horizontal separator
+int msg_scrollsize(void)
+{
+  return msg_scrolled + p_ch + 1;
+}
+
 /*
  * Scroll the screen up one line for displaying the next message line.
  */
 static void msg_scroll_up(void)
 {
-  /* scrolling up always works */
-  screen_del_lines(0, 0, 1, (int)Rows, NULL);
+  if (dy_flags & DY_MSGSEP) {
+    if (msg_scrolled == 0) {
+      screen_fill(Rows-p_ch-1, Rows-p_ch, 0, (int)Columns,
+                  fill_msgsep, fill_msgsep, hl_attr(HLF_MSGSEP));
+    }
+    int nscroll = MIN(msg_scrollsize()+1, Rows);
+    ui_call_set_scroll_region(Rows-nscroll, Rows-1, 0, Columns-1);
+    screen_del_lines(Rows-nscroll, 0, 1, nscroll, NULL);
+    ui_reset_scroll_region();
+  } else {
+    screen_del_lines(0, 0, 1, (int)Rows, NULL);
+  }
 }
 
 /*
@@ -2336,10 +2348,9 @@ static int do_more_prompt(int typed_char)
  * yet.  When stderr can't be used, collect error messages until the GUI has
  * started and they can be displayed in a message box.
  */
-void mch_errmsg(char *str)
+void mch_errmsg(const char *const str)
+  FUNC_ATTR_NONNULL_ALL
 {
-  int len;
-
 #ifdef UNIX
   /* On Unix use stderr if it's a tty.
    * When not going to start the GUI also use stderr.
@@ -2353,14 +2364,13 @@ void mch_errmsg(char *str)
   /* avoid a delay for a message that isn't there */
   emsg_on_display = FALSE;
 
-  len = (int)STRLEN(str) + 1;
+  const size_t len = strlen(str) + 1;
   if (error_ga.ga_data == NULL) {
     ga_set_growsize(&error_ga, 80);
     error_ga.ga_itemsize = 1;
   }
   ga_grow(&error_ga, len);
-  memmove((char_u *)error_ga.ga_data + error_ga.ga_len,
-      (char_u *)str, len);
+  memmove(error_ga.ga_data + error_ga.ga_len, str, len);
 #ifdef UNIX
   /* remove CR characters, they are displayed */
   {
