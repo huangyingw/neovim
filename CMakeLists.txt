@@ -12,7 +12,11 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 include(PreventInTreeBuilds)
 
 # Prefer our bundled versions of dependencies.
+if(DEFINED ENV{DEPS_BUILD_DIR})
+set(DEPS_PREFIX "$ENV{DEPS_BUILD_DIR}/usr" CACHE PATH "Path prefix for finding dependencies")
+else()
 set(DEPS_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/.deps/usr" CACHE PATH "Path prefix for finding dependencies")
+endif()
 if(CMAKE_CROSSCOMPILING AND NOT UNIX)
   list(INSERT CMAKE_FIND_ROOT_PATH 0 ${DEPS_PREFIX})
   list(INSERT CMAKE_PREFIX_PATH 0 ${DEPS_PREFIX}/../host/bin)
@@ -63,8 +67,8 @@ set_property(CACHE CMAKE_BUILD_TYPE PROPERTY
 # If not in a git repo (e.g., a tarball) these tokens define the complete
 # version string, else they are combined with the result of `git describe`.
 set(NVIM_VERSION_MAJOR 0)
-set(NVIM_VERSION_MINOR 2)
-set(NVIM_VERSION_PATCH 3)
+set(NVIM_VERSION_MINOR 3)
+set(NVIM_VERSION_PATCH 0)
 set(NVIM_VERSION_PRERELEASE "-dev") # for package maintainers
 
 # API level

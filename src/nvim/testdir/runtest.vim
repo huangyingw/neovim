@@ -61,7 +61,7 @@ set nomore
 lang mess C
 
 " Always use forward slashes.
-set shellslash
+" set shellslash
 
 " Prepare for calling test_garbagecollect_now().
 let v:testing = 1
@@ -237,6 +237,7 @@ let s:flaky = [
       \ 'Test_oneshot()',
       \ 'Test_out_cb()',
       \ 'Test_paused()',
+      \ 'Test_quoteplus()',
       \ 'Test_reltime()',
       \ 'Test_terminal_composing_unicode()',
       \ 'Test_terminal_redir_file()',

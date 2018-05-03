@@ -642,7 +642,7 @@ return {
       vim=true,
       redraw={'all_windows'},
       varname='p_dy',
-      defaults={if_true={vi="", vim="lastline"}}
+      defaults={if_true={vi="", vim="lastline,msgsep"}}
     },
     {
       full_name='eadirection', abbreviation='ead',
@@ -976,7 +976,7 @@ return {
       secure=true,
       vi_def=true,
       varname='p_fs',
-      defaults={if_true={vi=true}}
+      defaults={if_true={vi=false}}
     },
     {
       full_name='gdefault', abbreviation='gd',
@@ -1512,25 +1512,11 @@ return {
       defaults={if_true={vi=1000}}
     },
     {
-      full_name='maxmem', abbreviation='mm',
-      type='number', scope={'global'},
-      vi_def=true,
-      varname='p_mm',
-      defaults={if_true={vi=macros('DFLT_MAXMEM')}}
-    },
-    {
       full_name='maxmempattern', abbreviation='mmp',
       type='number', scope={'global'},
       vi_def=true,
       varname='p_mmp',
       defaults={if_true={vi=1000}}
-    },
-    {
-      full_name='maxmemtot', abbreviation='mmt',
-      type='number', scope={'global'},
-      vi_def=true,
-      varname='p_mmt',
-      defaults={if_true={vi=macros('DFLT_MAXMEMTOT')}}
     },
     {
       full_name='menuitems', abbreviation='mis',
@@ -2048,7 +2034,7 @@ return {
       varname='p_shcf',
       defaults={
         condition='WIN32',
-        if_true={vi="/c"},
+        if_true={vi="/s /c"},
         if_false={vi="-c"}
       }
     },
@@ -2104,7 +2090,11 @@ return {
       secure=true,
       vi_def=true,
       varname='p_sxq',
-      defaults={if_true={vi=""}}
+      defaults={
+        condition='WIN32',
+        if_true={vi="\""},
+        if_false={vi=""},
+      }
     },
     {
       full_name='shellxescape', abbreviation='sxe',

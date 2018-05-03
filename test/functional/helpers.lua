@@ -12,13 +12,18 @@ local Paths = require('test.config.paths')
 
 local check_cores = global_helpers.check_cores
 local check_logs = global_helpers.check_logs
-local neq = global_helpers.neq
-local eq = global_helpers.eq
-local ok = global_helpers.ok
-local map = global_helpers.map
-local filter = global_helpers.filter
 local dedent = global_helpers.dedent
+local eq = global_helpers.eq
+local expect_err = global_helpers.expect_err
+local filter = global_helpers.filter
+local map = global_helpers.map
+local matches = global_helpers.matches
+local neq = global_helpers.neq
+local ok = global_helpers.ok
+local read_file = global_helpers.read_file
+local sleep = global_helpers.sleep
 local table_flatten = global_helpers.table_flatten
+local write_file = global_helpers.write_file
 
 local start_dir = lfs.currentdir()
 -- XXX: NVIM_PROG takes precedence, QuickBuild sets it.
@@ -97,14 +102,14 @@ local function request(method, ...)
   return rv
 end
 
-local function next_message(timeout)
-  return session:next_message(timeout)
+local function next_msg(timeout)
+  return session:next_message(timeout and timeout or 10000)
 end
 
 local function expect_twostreams(msgs1, msgs2)
   local pos1, pos2 = 1, 1
   while pos1 <= #msgs1 or pos2 <= #msgs2 do
-    local msg = next_message()
+    local msg = next_msg()
     if pos1 <= #msgs1 and pcall(eq, msgs1[pos1], msg) then
       pos1 = pos1 + 1
     elseif pos2 <= #msgs2 then
@@ -117,7 +122,7 @@ local function expect_twostreams(msgs1, msgs2)
   end
 end
 
--- Expects a sequence of next_message() results. If multiple sequences are
+-- Expects a sequence of next_msg() results. If multiple sequences are
 -- passed they are tried until one succeeds, in order of shortest to longest.
 local function expect_msg_seq(...)
   if select('#', ...) < 1 then
@@ -140,7 +145,7 @@ local function expect_msg_seq(...)
     local expected_seq = seqs[anum]
     -- Collect enough messages to compare the next expected sequence.
     while #actual_seq < #expected_seq do
-      local msg = next_message(10000)  -- Big timeout for ASAN/valgrind.
+      local msg = next_msg(10000)  -- Big timeout for ASAN/valgrind.
       if msg == nil then
         error(cat_err(final_error,
                       string.format('got %d messages, expected %d',
@@ -304,12 +309,10 @@ local function retry(max, max_ms, fn)
     end
     luv.update_time()  -- Update cached value of luv.now() (libuv: uv_now()).
     if (max and tries >= max) or (luv.now() - start_time > timeout) then
-      if type(result) == "string" then
-        result = "\nretry() attempts: "..tostring(tries).."\n"..result
-      end
-      error(result)
+      error("\nretry() attempts: "..tostring(tries).."\n"..tostring(result))
     end
     tries = tries + 1
+    luv.sleep(20)  -- Avoid hot loop...
   end
 end
 
@@ -374,34 +377,6 @@ local function feed_command(...)
   end
 end
 
--- Dedent the given text and write it to the file name.
-local function write_file(name, text, no_dedent, append)
-  local file = io.open(name, (append and 'a' or 'w'))
-  if type(text) == 'table' then
-    -- Byte blob
-    local bytes = text
-    text = ''
-    for _, char in ipairs(bytes) do
-      text = ('%s%c'):format(text, char)
-    end
-  elseif not no_dedent then
-    text = dedent(text)
-  end
-  file:write(text)
-  file:flush()
-  file:close()
-end
-
-local function read_file(name)
-  local file = io.open(name, 'r')
-  if not file then
-    return nil
-  end
-  local ret = file:read('*a')
-  file:close()
-  return ret
-end
-
 local sourced_fnames = {}
 local function source(code)
   local fname = tmpname()
@@ -425,7 +400,7 @@ end
 local function set_shell_powershell()
   source([[
     set shell=powershell shellquote=( shellpipe=\| shellredir=> shellxquote=
-    set shellcmdflag=-NoLogo\ -NoProfile\ -ExecutionPolicy\ RemoteSigned\ -Command
+    let &shellcmdflag = '-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -Command Remove-Item -Force alias:sleep;'
   ]])
 end
 
@@ -464,18 +439,6 @@ local function wait()
   -- Execute 'nvim_eval' (a deferred function) to block
   -- until all pending input is processed.
   session:request('nvim_eval', '1')
-end
-
--- sleeps the test runner (_not_ the nvim instance)
-local function sleep(ms)
-  local function notification_cb(method, _)
-    if method == "redraw" then
-      error("Screen is attached; use screen:sleep() instead.")
-    end
-    return true
-  end
-
-  run(nil, notification_cb, nil, ms)
 end
 
 local function curbuf_contents()
@@ -689,31 +652,6 @@ local function alter_slashes(obj)
   end
 end
 
-local function hexdump(str)
-  local len = string.len(str)
-  local dump = ""
-  local hex = ""
-  local asc = ""
-
-  for i = 1, len do
-    if 1 == i % 8 then
-      dump = dump .. hex .. asc .. "\n"
-      hex = string.format("%04x: ", i - 1)
-      asc = ""
-    end
-
-    local ord = string.byte(str, i)
-    hex = hex .. string.format("%02x ", ord)
-    if ord >= 32 and ord <= 126 then
-      asc = asc .. string.char(ord)
-    else
-      asc = asc .. "."
-    end
-  end
-
-  return dump .. hex .. string.rep("   ", 8 - len % 8) .. asc
-end
-
 local module = {
   NIL = mpack.NIL,
   alter_slashes = alter_slashes,
@@ -736,6 +674,7 @@ local module = {
   exc_exec = exc_exec,
   expect = expect,
   expect_any = expect_any,
+  expect_err = expect_err,
   expect_msg_seq = expect_msg_seq,
   expect_twostreams = expect_twostreams,
   feed = feed,
@@ -743,10 +682,10 @@ local module = {
   filter = filter,
   funcs = funcs,
   get_pathsep = get_pathsep,
-  hexdump = hexdump,
   insert = insert,
   iswin = iswin,
   map = map,
+  matches = matches,
   merge_args = merge_args,
   meth_pcall = meth_pcall,
   meths = meths,
@@ -754,7 +693,7 @@ local module = {
   mkdir = lfs.mkdir,
   neq = neq,
   new_pipename = new_pipename,
-  next_message = next_message,
+  next_msg = next_msg,
   nvim = nvim,
   nvim_argv = nvim_argv,
   nvim_async = nvim_async,

@@ -847,7 +847,7 @@ static int insert_handle_key(InsertState *s)
 
 
   case ' ':
-    if (mod_mask != 4) {
+    if (mod_mask != MOD_MASK_CTRL) {
       goto normalchar;
     }
   // FALLTHROUGH
@@ -972,6 +972,10 @@ static int insert_handle_key(InsertState *s)
 
   case K_EVENT:       // some event
     multiqueue_process_events(main_loop.events);
+    break;
+
+  case K_COMMAND:       // some command
+    do_cmdline(NULL, getcmdkeycmd, NULL, 0);
     break;
 
   case K_HOME:        // <Home>
@@ -1176,6 +1180,14 @@ static int insert_handle_key(InsertState *s)
 
 normalchar:
     // Insert a normal character.
+
+    if (mod_mask == MOD_MASK_ALT || mod_mask == MOD_MASK_META) {
+      // Unmapped ALT/META chord behaves like ESC+c. #8213
+      stuffcharReadbuff(ESC);
+      stuffcharReadbuff(s->c);
+      break;
+    }
+
     if (!p_paste) {
       // Trigger InsertCharPre.
       char_u *str = do_insert_char_pre(s->c);
@@ -1428,7 +1440,7 @@ static void ins_ctrl_v(void)
      * line and will not removed by the redraw */
     edit_unputchar();
   clear_showcmd();
-  insert_special(c, FALSE, TRUE);
+  insert_special(c, true, true);
   revins_chars++;
   revins_legal++;
 }
@@ -3611,6 +3623,9 @@ int ins_compl_add_tv(typval_T *const tv, const Direction dir)
     memset(cptext, 0, sizeof(cptext));
   }
   if (word == NULL || (!aempty && *word == NUL)) {
+    for (size_t i = 0; i < CPT_COUNT; i++) {
+      xfree(cptext[i]);
+    }
     return FAIL;
   }
   return ins_compl_add((char_u *)word, -1, icase, NULL,
@@ -5050,13 +5065,11 @@ static void insert_special(int c, int allow_modmask, int ctrlv)
   char_u  *p;
   int len;
 
-  /*
-   * Special function key, translate into "<Key>". Up to the last '>' is
-   * inserted with ins_str(), so as not to replace characters in replace
-   * mode.
-   * Only use mod_mask for special keys, to avoid things like <S-Space>,
-   * unless 'allow_modmask' is TRUE.
-   */
+  // Special function key, translate into "<Key>". Up to the last '>' is
+  // inserted with ins_str(), so as not to replace characters in replace
+  // mode.
+  // Only use mod_mask for special keys, to avoid things like <S-Space>,
+  // unless 'allow_modmask' is TRUE.
   if (mod_mask & MOD_MASK_CMD) {  // Command-key never produces a normal key.
     allow_modmask = true;
   }
@@ -5241,28 +5254,27 @@ insertchar (
 
     buf[0] = c;
     i = 1;
-    if (textwidth > 0)
+    if (textwidth > 0) {
       virtcol = get_nolist_virtcol();
-    /*
-     * Stop the string when:
-     * - no more chars available
-     * - finding a special character (command key)
-     * - buffer is full
-     * - running into the 'textwidth' boundary
-     * - need to check for abbreviation: A non-word char after a word-char
-     */
-    while (    (c = vpeekc()) != NUL
-               && !ISSPECIAL(c)
-               && (!has_mbyte || MB_BYTE2LEN_CHECK(c) == 1)
-               && i < INPUT_BUFLEN
-               && (textwidth == 0
-                   || (virtcol += byte2cells(buf[i - 1])) < (colnr_T)textwidth)
-               && !(!no_abbr && !vim_iswordc(c) && vim_iswordc(buf[i - 1]))) {
+    }
+    // Stop the string when:
+    // - no more chars available
+    // - finding a special character (command key)
+    // - buffer is full
+    // - running into the 'textwidth' boundary
+    // - need to check for abbreviation: A non-word char after a word-char
+    while ((c = vpeekc()) != NUL
+           && !ISSPECIAL(c)
+           && MB_BYTE2LEN(c) == 1
+           && i < INPUT_BUFLEN
+           && !(p_fkmap && KeyTyped)  // Farsi mode mapping moves cursor
+           && (textwidth == 0
+               || (virtcol += byte2cells(buf[i - 1])) < (colnr_T)textwidth)
+           && !(!no_abbr && !vim_iswordc(c) && vim_iswordc(buf[i - 1]))) {
       c = vgetc();
-      if (p_hkmap && KeyTyped)
-        c = hkmap(c);                       /* Hebrew mode mapping */
-      if (p_fkmap && KeyTyped)
-        c = fkmap(c);                       /* Farsi mode mapping */
+      if (p_hkmap && KeyTyped) {
+        c = hkmap(c);                       // Hebrew mode mapping
+      }
       buf[i++] = c;
     }
 

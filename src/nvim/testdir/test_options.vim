@@ -158,6 +158,8 @@ func Test_set_completion()
   call assert_equal('"set fileencodings:ucs-bom,utf-8,default,latin1', @:)
 
   " Expand directories.
+  let shellslash = &shellslash
+  set shellslash
   call feedkeys(":set cdpath=./\<C-A>\<C-B>\"\<CR>", 'tx')
   call assert_match('./samples/ ', @:)
   call assert_notmatch('./small.vim ', @:)
@@ -168,6 +170,7 @@ func Test_set_completion()
 
   call feedkeys(":set tags=./\\\\ dif\<C-A>\<C-B>\"\<CR>", 'tx')
   call assert_equal('"set tags=./\\ diff diffexpr diffopt', @:)
+  let &shellslash = shellslash
 endfunc
 
 func Test_set_errors()
@@ -209,7 +212,14 @@ func Test_set_errors()
   call assert_fails('set statusline=%{', 'E540:')
   call assert_fails('set statusline=' . repeat("%p", 81), 'E541:')
   call assert_fails('set statusline=%(', 'E542:')
-  call assert_fails('set guicursor=x', 'E545:')
+  if has('cursorshape')
+    " This invalid value for 'guicursor' used to cause Vim to crash.
+    call assert_fails('set guicursor=i-ci,r-cr:h', 'E545:')
+    call assert_fails('set guicursor=i-ci', 'E545:')
+    call assert_fails('set guicursor=x', 'E545:')
+    call assert_fails('set guicursor=r-cr:horx', 'E548:')
+    call assert_fails('set guicursor=r-cr:hor0', 'E549:')
+  endif
   call assert_fails('set backupext=~ patchmode=~', 'E589:')
   call assert_fails('set winminheight=10 winheight=9', 'E591:')
   call assert_fails('set winminwidth=10 winwidth=9', 'E592:')

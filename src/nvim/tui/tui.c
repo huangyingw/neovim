@@ -450,7 +450,8 @@ static void update_attrs(UI *ui, HlAttrs attrs)
   int attr = ui->rgb ? attrs.rgb_ae_attr : attrs.cterm_ae_attr;
   bool bold = attr & HL_BOLD;
   bool italic = attr & HL_ITALIC;
-  bool reverse = attr & (HL_INVERSE | HL_STANDOUT);
+  bool reverse = attr & HL_INVERSE;
+  bool standout = attr & HL_STANDOUT;
   bool underline = attr & (HL_UNDERLINE), undercurl = attr & (HL_UNDERCURL);
 
   if (unibi_get_str(data->ut, unibi_set_attributes)) {
@@ -477,6 +478,9 @@ static void update_attrs(UI *ui, HlAttrs attrs)
     }
     if (underline || undercurl) {
       unibi_out(ui, unibi_enter_underline_mode);
+    }
+    if (standout) {
+      unibi_out(ui, unibi_enter_standout_mode);
     }
     if (reverse) {
       unibi_out(ui, unibi_enter_reverse_mode);
@@ -601,8 +605,7 @@ static void cursor_goto(UI *ui, int row, int col)
       int n = col - grid->col;
       if (n <= (row == grid->row ? 4 : 2)
           && cheap_to_print(ui, grid->row, grid->col, n)) {
-        UGRID_FOREACH_CELL(grid, grid->row, grid->row,
-                           grid->col, col - 1, {
+        UGRID_FOREACH_CELL(grid, grid->row, grid->row, grid->col, col - 1, {
           print_cell(ui, cell);
         });
       }
@@ -826,7 +829,7 @@ static void tui_cursor_goto(UI *ui, Integer row, Integer col)
 
 CursorShape tui_cursor_decode_shape(const char *shape_str)
 {
-  CursorShape shape = 0;
+  CursorShape shape;
   if (strequal(shape_str, "block")) {
     shape = SHAPE_BLOCK;
   } else if (strequal(shape_str, "vertical")) {
@@ -834,7 +837,8 @@ CursorShape tui_cursor_decode_shape(const char *shape_str)
   } else if (strequal(shape_str, "horizontal")) {
     shape = SHAPE_HOR;
   } else {
-    EMSG2(_(e_invarg2), shape_str);
+    WLOG("Unknown shape value '%s'", shape_str);
+    shape = SHAPE_BLOCK;
   }
   return shape;
 }
@@ -920,7 +924,6 @@ static void tui_set_mode(UI *ui, ModeShape mode)
   }
   TUIData *data = ui->data;
   cursorentry_T c = data->cursor_shapes[mode];
-  int shape = c.shape;
 
   if (c.id != 0 && ui->rgb) {
     int attr = syn_id2attr(c.id);
@@ -931,11 +934,12 @@ static void tui_set_mode(UI *ui, ModeShape mode)
     }
   }
 
-  switch (shape) {
+  int shape;
+  switch (c.shape) {
+    default:          abort(); break;
     case SHAPE_BLOCK: shape = 1; break;
     case SHAPE_HOR:   shape = 3; break;
     case SHAPE_VER:   shape = 5; break;
-    default: WLOG("Unknown shape value %d", shape); break;
   }
   UNIBI_SET_NUM_VAR(data->params[0], shape + (int)(c.blinkon == 0));
   unibi_out_ext(ui, data->unibi_ext.set_cursor_style);
@@ -1766,7 +1770,8 @@ static void flush_buf(UI *ui)
     bufp++;
   }
 
-  if (!data->busy && data->is_invisible) {
+  if (!data->busy) {
+    assert(data->is_invisible);
     // not busy and the cursor is invisible. Write a "cursor normal" command
     // after writing the buffer.
     bufp->base = data->norm;
