@@ -21,7 +21,7 @@ apt-get install -y \
     pkg-config \
     unzip
 
-make \
+make CMAKE_BUILD_TYPE=RelWithDebInfo \
     && make install \
     && ~/loadrc/gitrc/gci.sh
 
