@@ -22,7 +22,7 @@ apt-get install -y \
     unzip
 
 make CMAKE_BUILD_TYPE=RelWithDebInfo \
-    && make install \
+    && sudo make install \
     && ~/loadrc/gitrc/gci.sh
 
 pip install --upgrade neovim
