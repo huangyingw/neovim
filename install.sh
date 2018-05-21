@@ -23,7 +23,7 @@ apt-get install -y \
 
 make CMAKE_BUILD_TYPE=RelWithDebInfo \
     && sudo make install \
-    && ~/loadrc/gitrc/gci.sh
+    && ~/loadrc/gitrc/g.sh
 
 pip install --upgrade neovim
 pip2 install --upgrade neovim
