@@ -21,7 +21,8 @@ apt-get install -y \
     pkg-config \
     unzip
 
-make CMAKE_BUILD_TYPE=RelWithDebInfo \
+make clean \
+    && make CMAKE_BUILD_TYPE=RelWithDebInfo \
     && sudo make install \
     && ~/loadrc/gitrc/g.sh
 
