@@ -403,6 +403,7 @@ void terminal_enter(void)
   // erase the unfocused cursor
   invalidate_terminal(s->term, s->term->cursor.row, s->term->cursor.row + 1);
   showmode();
+  curwin->w_redr_status = true;  // For mode() in statusline. #8323
   ui_busy_start();
   redraw(false);
 
@@ -616,6 +617,11 @@ void terminal_get_line_attributes(Terminal *term, win_T *wp, int linenr,
 
     term_attrs[col] = attr_id;
   }
+}
+
+Buffer terminal_buf(const Terminal *term)
+{
+  return term->buf_handle;
 }
 
 // }}}
