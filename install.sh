@@ -21,9 +21,10 @@ apt-get install -y \
     pkg-config \
     unzip
 
-make \
-    && make install \
-    && ~/loadrc/gitrc/gci.sh
+make clean \
+    && make CMAKE_BUILD_TYPE=RelWithDebInfo \
+    && sudo make install \
+    && ~/loadrc/gitrc/g.sh
 
 pip install --upgrade neovim
 pip2 install --upgrade neovim
