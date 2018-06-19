@@ -6033,10 +6033,11 @@ static void ex_cquit(exarg_T *eap)
 static void ex_quit_all(exarg_T *eap)
 {
   if (cmdwin_type != 0) {
-    if (eap->forceit)
-      cmdwin_result = K_XF1;            /* ex_window() takes care of this */
-    else
+    if (eap->forceit) {
+      cmdwin_result = K_XF1;            // open_cmdwin() takes care of this
+    } else {
       cmdwin_result = K_XF2;
+    }
     return;
   }
 
@@ -8611,7 +8612,8 @@ eval_vars (
     default:
       // should not happen
       *errormsg = (char_u *)"";
-      return NULL;
+      result = (char_u *)"";    // avoid gcc warning
+      break;
     }
 
     resultlen = STRLEN(result);         /* length of new string */
