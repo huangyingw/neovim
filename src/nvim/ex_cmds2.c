@@ -1339,6 +1339,22 @@ void dialog_changed(buf_T *buf, int checkall)
   }
 }
 
+/// Ask the user whether to close the terminal buffer or not.
+///
+/// @param buf The terminal buffer.
+/// @return bool Whether to close the buffer or not.
+bool dialog_close_terminal(buf_T *buf)
+{
+  char_u buff[DIALOG_MSG_SIZE];
+
+  dialog_msg(buff, _("Close \"%s\"?"),
+             (buf->b_fname != NULL) ? buf->b_fname : (char_u *)"?");
+
+  int ret = vim_dialog_yesnocancel(VIM_QUESTION, NULL, buff, 1);
+
+  return (ret == VIM_YES) ? true : false;
+}
+
 /// Return true if the buffer "buf" can be abandoned, either by making it
 /// hidden, autowriting it or unloading it.
 bool can_abandon(buf_T *buf, int forceit)
@@ -2677,14 +2693,27 @@ void ex_packloadall(exarg_T *eap)
 /// ":packadd[!] {name}"
 void ex_packadd(exarg_T *eap)
 {
-  static const char *plugpat = "pack/*/opt/%s";  // NOLINT
+  static const char *plugpat = "pack/*/%s/%s";    // NOLINT
+  int res = OK;
 
-  size_t len = STRLEN(plugpat) + STRLEN(eap->arg);
-  char *pat = (char *)xmallocz(len);
-  vim_snprintf(pat, len, plugpat, eap->arg);
-  do_in_path(p_pp, (char_u *)pat, DIP_ALL + DIP_DIR + DIP_ERR, add_pack_plugin,
-             eap->forceit ? &APP_ADD_DIR : &APP_BOTH);
-  xfree(pat);
+  // Round 1: use "start", round 2: use "opt".
+  for (int round = 1; round <= 2; round++) {
+    // Only look under "start" when loading packages wasn't done yet.
+    if (round == 1 && did_source_packages) {
+      continue;
+    }
+
+    const size_t len = STRLEN(plugpat) + STRLEN(eap->arg) + 5;
+    char *pat = xmallocz(len);
+    vim_snprintf(pat, len, plugpat, round == 1 ? "start" : "opt", eap->arg);
+    // The first round don't give a "not found" error, in the second round
+    // only when nothing was found in the first round.
+    res = do_in_path(p_pp, (char_u *)pat,
+                     DIP_ALL + DIP_DIR
+                     + (round == 2 && res == FAIL ? DIP_ERR : 0),
+                     add_pack_plugin, eap->forceit ? &APP_ADD_DIR : &APP_BOTH);
+    xfree(pat);
+  }
 }
 
 /// ":options"

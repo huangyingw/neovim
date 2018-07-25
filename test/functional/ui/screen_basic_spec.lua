@@ -48,13 +48,13 @@ describe('screen', function()
   end)
 end)
 
-describe('Screen', function()
+local function screen_tests(newgrid)
   local screen
 
   before_each(function()
     clear()
     screen = Screen.new()
-    screen:attach()
+    screen:attach({rgb=true,ext_newgrid=newgrid})
     screen:set_default_attr_ids( {
       [0] = {bold=true, foreground=255},
       [1] = {bold=true, reverse=true},
@@ -354,6 +354,101 @@ describe('Screen', function()
         {0:~                                                    }|
                                                              |
       ]])
+
+      feed(':echo "'..string.rep('x\\n', 12)..'"<cr>')
+      screen:expect([[
+        x                                                    |
+        x                                                    |
+        x                                                    |
+        x                                                    |
+        x                                                    |
+        x                                                    |
+        x                                                    |
+        x                                                    |
+        x                                                    |
+        x                                                    |
+        x                                                    |
+        x                                                    |
+                                                             |
+        {7:Press ENTER or type command to continue}^              |
+      ]])
+
+      feed('<cr>')
+      screen:expect([[
+        {4: [No Name] }{2: [No Name] }{3:                              }{4:X}|
+        ^                                                     |
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+                                                             |
+      ]])
+
+    end)
+
+    it('redraws properly with :tab split right after scroll', function()
+      feed('30Ofoo<esc>gg')
+
+      command('vsplit')
+      screen:expect([[
+        ^foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        {1:[No Name] [+]              }{3:[No Name] [+]             }|
+                                                             |
+      ]])
+
+      feed('<PageDown>')
+      screen:expect([[
+        ^foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        foo                       {3:│}foo                       |
+        {1:[No Name] [+]              }{3:[No Name] [+]             }|
+                                                             |
+      ]])
+
+      command('tab split')
+      screen:expect([[
+        {4: }{5:2}{4:+ [No Name] }{2: + [No Name] }{3:                         }{4:X}|
+        ^foo                                                  |
+        foo                                                  |
+        foo                                                  |
+        foo                                                  |
+        foo                                                  |
+        foo                                                  |
+        foo                                                  |
+        foo                                                  |
+        foo                                                  |
+        foo                                                  |
+        foo                                                  |
+        foo                                                  |
+                                                             |
+      ]])
     end)
   end)
 
@@ -651,9 +746,10 @@ describe('Screen', function()
     it('has minimum width/height values', function()
       screen:try_resize(1, 1)
       screen:expect([[
-        {2:-- INS^ERT --}|
-                    |
+        resize^      |
+        {2:-- INSERT -} |
       ]])
+
       feed('<esc>:ls')
       screen:expect([[
         resize      |
@@ -740,4 +836,12 @@ describe('Screen', function()
                                                            |
     ]])
   end)
+end
+
+describe("Screen (char-based)", function()
+  screen_tests(false)
+end)
+
+describe("Screen (line-based)", function()
+  screen_tests(true)
 end)

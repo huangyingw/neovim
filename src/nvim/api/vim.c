@@ -21,6 +21,7 @@
 #include "nvim/vim.h"
 #include "nvim/buffer.h"
 #include "nvim/file_search.h"
+#include "nvim/highlight.h"
 #include "nvim/window.h"
 #include "nvim/types.h"
 #include "nvim/ex_docmd.h"
@@ -1162,11 +1163,12 @@ Array nvim_call_atomic(uint64_t channel_id, Array calls, Error *err)
     }
     Array args = call.items[1].data.array;
 
-    MsgpackRpcRequestHandler handler = msgpack_rpc_get_handler_for(name.data,
-                                                                   name.size);
-    if (handler.fn == msgpack_rpc_handle_missing_method) {
-      api_set_error(&nested_error, kErrorTypeException, "Invalid method: %s",
-                    name.size > 0 ? name.data : "<empty>");
+    MsgpackRpcRequestHandler handler =
+        msgpack_rpc_get_handler_for(name.data,
+                                    name.size,
+                                    &nested_error);
+
+    if (ERROR_SET(&nested_error)) {
       break;
     }
     Object result = handler.fn(channel_id, args, &nested_error);
@@ -1848,4 +1850,23 @@ Object nvim_get_proc(Integer pid, Error *err)
   }
 #endif
   return rvobj;
+}
+
+/// NB: if your UI doesn't use hlstate, this will not return hlstate first time
+Array nvim__inspect_cell(Integer row, Integer col, Error *err)
+{
+  Array ret = ARRAY_DICT_INIT;
+  if (row < 0 || row >= screen_Rows
+      || col < 0 || col >= screen_Columns) {
+    return ret;
+  }
+  size_t off = LineOffset[(size_t)row] + (size_t)col;
+  ADD(ret, STRING_OBJ(cstr_to_string((char *)ScreenLines[off])));
+  int attr = ScreenAttrs[off];
+  ADD(ret, DICTIONARY_OBJ(hl_get_attr_by_id(attr, true, err)));
+  // will not work first time
+  if (!highlight_use_hlstate()) {
+    ADD(ret, ARRAY_OBJ(hl_inspect(attr)));
+  }
+  return ret;
 }

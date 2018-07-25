@@ -17,7 +17,6 @@ SCRIPTS_DEFAULT = \
            test14.out             \
            test24.out             \
            test37.out             \
-           test40.out             \
            test42.out             \
            test48.out             \
            test52.out             \
@@ -41,6 +40,7 @@ NEW_TESTS ?= \
 	    test_changedtick.res \
 	    test_charsearch.res \
 	    test_cindent.res \
+	    test_clientserver.res \
 	    test_close_count.res \
 	    test_cmdline.res \
 	    test_command_count.res \
@@ -93,6 +93,7 @@ NEW_TESTS ?= \
 	    test_quickfix.res \
 	    test_quotestar.res \
 	    test_recover.res \
+	    test_registers.res \
 	    test_retab.res \
 	    test_scrollbind.res \
 	    test_search.res \
@@ -102,6 +103,7 @@ NEW_TESTS ?= \
 	    test_stat.res \
 	    test_startup.res \
 	    test_substitute.res \
+	    test_swap.res \
 	    test_syntax.res \
 	    test_system.res \
 	    test_tab.res \
@@ -114,6 +116,7 @@ NEW_TESTS ?= \
 	    test_visual.res \
 	    test_winbuf_close.res \
 	    test_window_id.res \
+	    test_wordcount.res \
 	    test_writefile.res \
 	    test_alot_latin.res \
 	    test_alot_utf8.res \
