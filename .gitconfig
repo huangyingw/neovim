@@ -1,0 +1,21 @@
+[remote "huangyingw"]
+    url = git@github.com:huangyingw/neovim.git
+    fetch = +refs/heads/*:refs/remotes/huangyingw/*
+[remote "github"]
+    url = git@github.com:huangyingw/neovim.git
+    fetch = +refs/heads/*:refs/remotes/github/*
+[push]
+    remote = github
+[gsync]
+    remote = huangyingw
+    branch = master
+[merge]
+	allow = true
+[branch "dev"]
+    remote = github
+    merge = refs/heads/dev
+[branch "master"]
+    remote = huangyingw
+    merge = refs/heads/master
+[commit]
+	message = n
