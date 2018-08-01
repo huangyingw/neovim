@@ -32,7 +32,7 @@
 #include "nvim/os/signal.h"
 #include "nvim/popupmnu.h"
 #include "nvim/screen.h"
-#include "nvim/syntax.h"
+#include "nvim/highlight.h"
 #include "nvim/window.h"
 #include "nvim/cursor_shape.h"
 #ifdef FEAT_TUI
@@ -49,17 +49,13 @@
 #define MAX_UI_COUNT 16
 
 static UI *uis[MAX_UI_COUNT];
-static bool ui_ext[UI_WIDGETS] = { 0 };
+static bool ui_ext[kUIExtCount] = { 0 };
 static size_t ui_count = 0;
 static int row = 0, col = 0;
-static struct {
-  int top, bot, left, right;
-} sr;
-static int current_attr_code = 0;
 static bool pending_cursor_update = false;
 static int busy = 0;
-static int height, width;
-static int old_mode_idx = -1;
+static int mode_idx = SHAPE_IDX_N;
+static bool pending_mode_update = false;
 
 #if MIN_LOG_LEVEL > DEBUG_LOG_LEVEL
 # define UI_LOG(funname, ...)
@@ -89,7 +85,6 @@ static char uilog_last_event[1024] = { 0 };
 #ifdef _MSC_VER
 # define UI_CALL(funname, ...) \
     do { \
-      flush_cursor_update(); \
       UI_LOG(funname, 0); \
       for (size_t i = 0; i < ui_count; i++) { \
         UI *ui = uis[i]; \
@@ -99,7 +94,6 @@ static char uilog_last_event[1024] = { 0 };
 #else
 # define UI_CALL(...) \
     do { \
-      flush_cursor_update(); \
       UI_LOG(__VA_ARGS__, 0); \
       for (size_t i = 0; i < ui_count; i++) { \
         UI *ui = uis[i]; \
@@ -107,8 +101,9 @@ static char uilog_last_event[1024] = { 0 };
       } \
     } while (0)
 #endif
-#define CNT(...) SELECT_NTH(__VA_ARGS__, MORE, MORE, MORE, MORE, ZERO, ignore)
-#define SELECT_NTH(a1, a2, a3, a4, a5, a6, ...) a6
+#define CNT(...) SELECT_NTH(__VA_ARGS__, MORE, MORE, MORE, \
+                            MORE, MORE, MORE, MORE, MORE, ZERO, ignore)
+#define SELECT_NTH(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, ...) a10
 #define UI_CALL_HELPER(c, ...) UI_CALL_HELPER2(c, __VA_ARGS__)
 // Resolves to UI_CALL_MORE or UI_CALL_ZERO.
 #define UI_CALL_HELPER2(c, ...) UI_CALL_##c(__VA_ARGS__)
@@ -143,14 +138,11 @@ void ui_builtin_stop(void)
   UI_CALL(stop);
 }
 
-/// Returns true if UI `ui` is stopped.
-bool ui_is_stopped(UI *ui)
-{
-  return ui->data == NULL;
-}
-
 bool ui_rgb_attached(void)
 {
+  if (!headless_mode && p_tgc) {
+    return true;
+  }
   for (size_t i = 0; i < ui_count; i++) {
     if (uis[i]->rgb) {
       return true;
@@ -174,89 +166,6 @@ void ui_event(char *name, Array args)
 }
 
 
-/// Converts an attrentry_T into an HlAttrs
-///
-/// @param[in] aep data to convert
-/// @param use_rgb use 'gui*' settings if true, else resorts to 'cterm*'
-HlAttrs attrentry2hlattrs(const attrentry_T *aep, bool use_rgb)
-{
-  assert(aep);
-
-  HlAttrs attrs = HLATTRS_INIT;
-  int mask = 0;
-
-  mask = use_rgb ? aep->rgb_ae_attr : aep->cterm_ae_attr;
-
-  attrs.bold = mask & HL_BOLD;
-  attrs.underline = mask & HL_UNDERLINE;
-  attrs.undercurl = mask & HL_UNDERCURL;
-  attrs.italic = mask & HL_ITALIC;
-  attrs.reverse = mask & (HL_INVERSE | HL_STANDOUT);
-
-  if (use_rgb) {
-    if (aep->rgb_fg_color != -1) {
-      attrs.foreground = aep->rgb_fg_color;
-    }
-
-    if (aep->rgb_bg_color != -1) {
-      attrs.background = aep->rgb_bg_color;
-    }
-
-    if (aep->rgb_sp_color != -1) {
-      attrs.special = aep->rgb_sp_color;
-    }
-  } else {
-    if (cterm_normal_fg_color != aep->cterm_fg_color) {
-      attrs.foreground = aep->cterm_fg_color - 1;
-    }
-
-    if (cterm_normal_bg_color != aep->cterm_bg_color) {
-        attrs.background = aep->cterm_bg_color - 1;
-    }
-  }
-
-  return attrs;
-}
-
-Dictionary hlattrs2dict(HlAttrs attrs)
-{
-  Dictionary hl = ARRAY_DICT_INIT;
-
-  if (attrs.bold) {
-    PUT(hl, "bold", BOOLEAN_OBJ(true));
-  }
-
-  if (attrs.underline) {
-    PUT(hl, "underline", BOOLEAN_OBJ(true));
-  }
-
-  if (attrs.undercurl) {
-    PUT(hl, "undercurl", BOOLEAN_OBJ(true));
-  }
-
-  if (attrs.italic) {
-    PUT(hl, "italic", BOOLEAN_OBJ(true));
-  }
-
-  if (attrs.reverse) {
-    PUT(hl, "reverse", BOOLEAN_OBJ(true));
-  }
-
-  if (attrs.foreground != -1) {
-    PUT(hl, "foreground", INTEGER_OBJ(attrs.foreground));
-  }
-
-  if (attrs.background != -1) {
-    PUT(hl, "background", INTEGER_OBJ(attrs.background));
-  }
-
-  if (attrs.special != -1) {
-    PUT(hl, "special", INTEGER_OBJ(attrs.special));
-  }
-
-  return hl;
-}
-
 void ui_refresh(void)
 {
   if (!ui_active()) {
@@ -269,8 +178,8 @@ void ui_refresh(void)
   }
 
   int width = INT_MAX, height = INT_MAX;
-  bool ext_widgets[UI_WIDGETS];
-  for (UIWidget i = 0; (int)i < UI_WIDGETS; i++) {
+  bool ext_widgets[kUIExtCount];
+  for (UIExtension i = 0; (int)i < kUIExtCount; i++) {
     ext_widgets[i] = true;
   }
 
@@ -278,23 +187,30 @@ void ui_refresh(void)
     UI *ui = uis[i];
     width = MIN(ui->width, width);
     height = MIN(ui->height, height);
-    for (UIWidget i = 0; (int)i < UI_WIDGETS; i++) {
+    for (UIExtension i = 0; (int)i < kUIExtCount; i++) {
       ext_widgets[i] &= ui->ui_ext[i];
     }
   }
 
   row = col = 0;
+  pending_cursor_update = true;
+
+  ui_default_colors_set();
 
   int save_p_lz = p_lz;
   p_lz = false;  // convince redrawing() to return true ...
   screen_resize(width, height);
   p_lz = save_p_lz;
 
-  for (UIWidget i = 0; (int)i < UI_WIDGETS; i++) {
-    ui_set_external(i, ext_widgets[i]);
+  for (UIExtension i = 0; (int)i < kUIExtCount; i++) {
+    ui_ext[i] = ext_widgets[i];
+    if (i < kUIGlobalCount) {
+      ui_call_option_set(cstr_as_string((char *)ui_ext_names[i]),
+                         BOOLEAN_OBJ(ext_widgets[i]));
+    }
   }
   ui_mode_info_set();
-  old_mode_idx = -1;
+  pending_mode_update = true;
   ui_cursor_shape();
 }
 
@@ -308,20 +224,15 @@ void ui_schedule_refresh(void)
   loop_schedule(&main_loop, event_create(ui_refresh_event, 0));
 }
 
-void ui_resize(int new_width, int new_height)
+void ui_resize(int width, int height)
 {
-  width = new_width;
-  height = new_height;
+  ui_call_grid_resize(1, width, height);
+}
 
-  UI_CALL(update_fg, (ui->rgb ? normal_fg : cterm_normal_fg_color - 1));
-  UI_CALL(update_bg, (ui->rgb ? normal_bg : cterm_normal_bg_color - 1));
-  UI_CALL(update_sp, (ui->rgb ? normal_sp : -1));
-
-  sr.top = 0;
-  sr.bot = height - 1;
-  sr.left = 0;
-  sr.right = width - 1;
-  ui_call_resize(width, height);
+void ui_default_colors_set(void)
+{
+  ui_call_default_colors_set(normal_fg, normal_bg, normal_sp,
+                             cterm_normal_fg_color, cterm_normal_bg_color);
 }
 
 void ui_busy_start(void)
@@ -346,6 +257,18 @@ void ui_attach_impl(UI *ui)
 
   uis[ui_count++] = ui;
   ui_refresh_options();
+
+  for (UIExtension i = kUIGlobalCount; (int)i < kUIExtCount; i++) {
+    ui_set_ext_option(ui, i, ui->ui_ext[i]);
+  }
+
+  bool sent = false;
+  if (ui->ui_ext[kUIHlState]) {
+    sent = highlight_use_hlstate();
+  }
+  if (!sent) {
+    ui_send_all_hls(ui);
+  }
   ui_refresh();
 }
 
@@ -379,94 +302,32 @@ void ui_detach_impl(UI *ui)
   }
 }
 
-// Set scrolling region for window 'wp'.
-// The region starts 'off' lines from the start of the window.
-// Also set the vertical scroll region for a vertically split window.  Always
-// the full width of the window, excluding the vertical separator.
-void ui_set_scroll_region(win_T *wp, int off)
+void ui_set_ext_option(UI *ui, UIExtension ext, bool active)
 {
-  sr.top = wp->w_winrow + off;
-  sr.bot = wp->w_winrow + wp->w_height - 1;
-
-  if (wp->w_width != Columns) {
-    sr.left = wp->w_wincol;
-    sr.right = wp->w_wincol + wp->w_width - 1;
-  }
-
-  ui_call_set_scroll_region(sr.top, sr.bot, sr.left, sr.right);
-}
-
-// Reset scrolling region to the whole screen.
-void ui_reset_scroll_region(void)
-{
-  sr.top = 0;
-  sr.bot = (int)Rows - 1;
-  sr.left = 0;
-  sr.right = (int)Columns - 1;
-  ui_call_set_scroll_region(sr.top, sr.bot, sr.left, sr.right);
-}
-
-void ui_start_highlight(int attr_code)
-{
-  current_attr_code = attr_code;
-
-  if (!ui_active()) {
+  if (ext < kUIGlobalCount) {
+    ui_refresh();
     return;
   }
-
-  set_highlight_args(current_attr_code);
-}
-
-void ui_stop_highlight(void)
-{
-  current_attr_code = HL_NORMAL;
-
-  if (!ui_active()) {
-    return;
-  }
-
-  set_highlight_args(current_attr_code);
-}
-
-void ui_puts(uint8_t *str)
-{
-  uint8_t *p = str;
-  uint8_t c;
-
-  while ((c = *p)) {
-    if (c < 0x20) {
-      abort();
-    }
-
-    size_t clen = (size_t)mb_ptr2len(p);
-    ui_call_put((String){ .data = (char *)p, .size = clen });
-    col++;
-    if (mb_ptr2cells(p) > 1) {
-      // double cell character, blank the next cell
-      ui_call_put((String)STRING_INIT);
-      col++;
-    }
-    if (utf_ambiguous_width(utf_ptr2char(p))) {
-      pending_cursor_update = true;
-    }
-    if (col >= width) {
-      ui_linefeed();
-    }
-    p += clen;
-
-    if (p_wd) {  // 'writedelay': flush & delay each time.
-      ui_flush();
-      assert(p_wd >= 0
-             && (sizeof(long) <= sizeof(uint64_t) || p_wd <= UINT64_MAX));
-      os_delay((uint64_t)p_wd, false);
-    }
+  if (ui->option_set) {
+    ui->option_set(ui, cstr_as_string((char *)ui_ext_names[ext]),
+                   BOOLEAN_OBJ(active));
   }
 }
 
-void ui_putc(uint8_t c)
+void ui_line(int row, int startcol, int endcol, int clearcol, int clearattr)
 {
-  uint8_t buf[2] = {c, 0};
-  ui_puts(buf);
+  size_t off = LineOffset[row]+(size_t)startcol;
+  UI_CALL(raw_line, 1, row, startcol, endcol, clearcol, clearattr,
+          (const schar_T *)ScreenLines+off, (const sattr_T *)ScreenAttrs+off);
+  if (p_wd) {  // 'writedelay': flush & delay each time.
+    int old_row = row, old_col = col;
+    // If'writedelay is active, we set the cursor to highlight what was drawn
+    ui_cursor_goto(row, MIN(clearcol, (int)Columns-1));
+    ui_flush();
+    uint64_t wd = (uint64_t)labs(p_wd);
+    os_microdelay(wd * 1000u, true);
+    ui_cursor_goto(old_row, old_col);
+  }
 }
 
 void ui_cursor_goto(int new_row, int new_col)
@@ -477,6 +338,32 @@ void ui_cursor_goto(int new_row, int new_col)
   row = new_row;
   col = new_col;
   pending_cursor_update = true;
+}
+
+void ui_add_linewrap(int row)
+{
+  // TODO(bfredl): check that this actually still works
+  // and move to TUI module in that case.
+#if 0
+  // First make sure we are at the end of the screen line,
+  // then output the same character again to let the
+  // terminal know about the wrap.  If the terminal doesn't
+  // auto-wrap, we overwrite the character.
+  if (ui_current_col() != Columns) {
+    screen_char(LineOffset[row] + (unsigned)Columns - 1, row,
+                (int)(Columns - 1));
+  }
+
+  // When there is a multi-byte character, just output a
+  // space to keep it simple. */
+  if (ScreenLines[LineOffset[row] + (Columns - 1)][1] != 0) {
+    ui_putc(' ');
+  } else {
+    ui_puts(ScreenLines[LineOffset[row] + (Columns - 1)]);
+  }
+  // force a redraw of the first char on the next line
+  ScreenAttrs[LineOffset[row+1]] = (sattr_T)-1;
+#endif
 }
 
 void ui_mode_info_set(void)
@@ -500,49 +387,18 @@ int ui_current_col(void)
 void ui_flush(void)
 {
   cmdline_ui_flush();
+  if (pending_cursor_update) {
+    ui_call_grid_cursor_goto(1, row, col);
+    pending_cursor_update = false;
+  }
+  if (pending_mode_update) {
+    char *full_name = shape_table[mode_idx].full_name;
+    ui_call_mode_change(cstr_as_string(full_name), mode_idx);
+    pending_mode_update = false;
+  }
   ui_call_flush();
 }
 
-static void set_highlight_args(int attr_code)
-{
-  HlAttrs rgb_attrs = HLATTRS_INIT;
-  HlAttrs cterm_attrs = rgb_attrs;
-
-  if (attr_code == HL_NORMAL) {
-    goto end;
-  }
-  attrentry_T *aep = syn_cterm_attr2entry(attr_code);
-
-  if (!aep) {
-    goto end;
-  }
-
-  rgb_attrs = attrentry2hlattrs(aep, true);
-  cterm_attrs = attrentry2hlattrs(aep, false);
-
-end:
-  UI_CALL(highlight_set, (ui->rgb ? rgb_attrs : cterm_attrs));
-}
-
-void ui_linefeed(void)
-{
-  int new_col = 0;
-  int new_row = row;
-  if (new_row < sr.bot) {
-    new_row++;
-  } else {
-    ui_call_scroll(1);
-  }
-  ui_cursor_goto(new_row, new_col);
-}
-
-static void flush_cursor_update(void)
-{
-  if (pending_cursor_update) {
-    pending_cursor_update = false;
-    ui_call_cursor_goto(row, col);
-  }
-}
 
 /// Check if current mode has changed.
 /// May update the shape of the cursor.
@@ -551,26 +407,37 @@ void ui_cursor_shape(void)
   if (!full_screen) {
     return;
   }
-  int mode_idx = cursor_get_mode_idx();
+  int new_mode_idx = cursor_get_mode_idx();
 
-  if (old_mode_idx != mode_idx) {
-    old_mode_idx = mode_idx;
-    char *full_name = shape_table[mode_idx].full_name;
-    ui_call_mode_change(cstr_as_string(full_name), mode_idx);
+  if (new_mode_idx != mode_idx) {
+    mode_idx = new_mode_idx;
+    pending_mode_update = true;
   }
   conceal_check_cursur_line();
 }
 
 /// Returns true if `widget` is externalized.
-bool ui_is_external(UIWidget widget)
+bool ui_is_external(UIExtension widget)
 {
   return ui_ext[widget];
 }
 
-/// Sets `widget` as "external".
-/// Such widgets are not drawn by Nvim; external UIs are expected to handle
-/// higher-level UI events and present the data.
-void ui_set_external(UIWidget widget, bool external)
+Array ui_array(void)
 {
-  ui_ext[widget] = external;
+  Array all_uis = ARRAY_DICT_INIT;
+  for (size_t i = 0; i < ui_count; i++) {
+    UI *ui = uis[i];
+    Dictionary info = ARRAY_DICT_INIT;
+    PUT(info, "width", INTEGER_OBJ(ui->width));
+    PUT(info, "height", INTEGER_OBJ(ui->height));
+    PUT(info, "rgb", BOOLEAN_OBJ(ui->rgb));
+    for (UIExtension j = 0; j < kUIExtCount; j++) {
+      PUT(info, ui_ext_names[j], BOOLEAN_OBJ(ui->ui_ext[j]));
+    }
+    if (ui->inspect) {
+      ui->inspect(ui, &info);
+    }
+    ADD(all_uis, DICTIONARY_OBJ(info));
+  }
+  return all_uis;
 }

@@ -4,7 +4,7 @@
                             NVIM REFERENCE MANUAL
 
 
-Terminal UI						*tui*
+Terminal UI						*TUI* *tui*
 
 Nvim (except in |--headless| mode) uses information about the terminal you are
 using to present a built-in UI.  If that information is not correct, the
@@ -231,11 +231,6 @@ correct values. See |:mode|.
 ==============================================================================
 Slow and fast terminals				*slow-fast-terminal*
 						*slow-terminal*
-
-If you have a fast terminal you may like to set the 'ruler' option.  The
-cursor position is shown in the status line.  If you are using horizontal
-scrolling ('wrap' option off) consider setting 'sidescroll' to a small
-number.
 
 If you have a slow terminal you may want to reset the 'showcmd' and 'ruler'
 options.  The command characters and cursor positions will not be shown in the

@@ -7,19 +7,22 @@
 typedef struct ucell UCell;
 typedef struct ugrid UGrid;
 
+#define CELLBYTES (sizeof(schar_T))
+
 struct ucell {
-  char data[6 * MAX_MCO + 1];
+  char data[CELLBYTES + 1];
   HlAttrs attrs;
 };
 
 struct ugrid {
   int top, bot, left, right;
   int row, col;
-  int bg, fg;
   int width, height;
   HlAttrs attrs;
   UCell **cells;
 };
+
+// -V:UGRID_FOREACH_CELL:625
 
 #define UGRID_FOREACH_CELL(grid, top, bot, left, right, code) \
   do { \

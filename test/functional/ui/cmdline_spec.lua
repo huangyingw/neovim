@@ -22,11 +22,16 @@ describe('external cmdline', function()
       [1] = {bold = true, foreground = Screen.colors.Blue1},
       [2] = {reverse = true},
       [3] = {bold = true, reverse = true},
+      [4] = {foreground = Screen.colors.Grey100, background = Screen.colors.Red},
+      [5] = {bold = true, foreground = Screen.colors.SeaGreen4},
     })
     screen:set_on_event_handler(function(name, data)
       if name == "cmdline_show" then
         local content, pos, firstc, prompt, indent, level = unpack(data)
         ok(level > 0)
+        for _,item in ipairs(content) do
+          item[1] = screen:get_hl(item[1])
+        end
         cmdline[level] = {content=content, pos=pos, firstc=firstc,
                           prompt=prompt, indent=indent}
         last_level = level
@@ -85,6 +90,7 @@ describe('external cmdline', function()
                                |
     ]], nil, nil, function()
       eq(1, last_level)
+      --print(require('inspect')(cmdline))
       eq({{
         content = { { {}, "" } },
         firstc = ":",
@@ -154,6 +160,90 @@ describe('external cmdline', function()
                                |
     ]], nil, nil, function()
       eq({}, cmdline)
+    end)
+  end)
+
+  describe("redraws statusline on entering", function()
+    before_each(function()
+      command('set laststatus=2')
+      command('set statusline=%{mode()}')
+    end)
+
+    it('from normal mode', function()
+      feed(':')
+      screen:expect([[
+        ^                         |
+        {1:~                        }|
+        {1:~                        }|
+        {3:c                        }|
+                                 |
+      ]], nil, nil, function()
+        eq({{
+          content = { { {}, "" } },
+          firstc = ":",
+          indent = 0,
+          pos = 0,
+          prompt = ""
+        }}, cmdline)
+      end)
+    end)
+
+    it('but not with scrolled messages', function()
+      screen:try_resize(50,10)
+      feed(':echoerr doesnotexist<cr>')
+      screen:expect([[
+                                                          |
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {3:                                                  }|
+        {4:E121: Undefined variable: doesnotexist}            |
+        {4:E15: Invalid expression: doesnotexist}             |
+        {5:Press ENTER or type command to continue}^           |
+      ]])
+      feed(':echoerr doesnotexist<cr>')
+      screen:expect([[
+                                                          |
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {3:                                                  }|
+        {4:E121: Undefined variable: doesnotexist}            |
+        {4:E15: Invalid expression: doesnotexist}             |
+        {4:E121: Undefined variable: doesnotexist}            |
+        {4:E15: Invalid expression: doesnotexist}             |
+        {5:Press ENTER or type command to continue}^           |
+      ]])
+
+      feed(':echoerr doesnotexist<cr>')
+      screen:expect([[
+                                                          |
+        {1:~                                                 }|
+        {3:                                                  }|
+        {4:E121: Undefined variable: doesnotexist}            |
+        {4:E15: Invalid expression: doesnotexist}             |
+        {4:E121: Undefined variable: doesnotexist}            |
+        {4:E15: Invalid expression: doesnotexist}             |
+        {4:E121: Undefined variable: doesnotexist}            |
+        {4:E15: Invalid expression: doesnotexist}             |
+        {5:Press ENTER or type command to continue}^           |
+      ]])
+
+      feed('<cr>')
+      screen:expect([[
+        ^                                                  |
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {1:~                                                 }|
+        {3:n                                                 }|
+                                                          |
+      ]])
     end)
   end)
 
@@ -265,11 +355,11 @@ describe('external cmdline', function()
     -- redraw! forgets cursor position. Be OK with that, as UI should indicate
     -- focus is at external cmdline anyway.
     screen:expect([[
-                               |
-      {1:~                        }|
-      {1:~                        }|
-      {1:~                        }|
       ^                         |
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+                               |
     ]], nil, nil, function()
       eq(expectation, cmdline)
     end)
@@ -277,11 +367,11 @@ describe('external cmdline', function()
 
     feed('<cr>')
     screen:expect([[
-                               |
-      {1:~                        }|
-      {1:~                        }|
-      {1:~                        }|
       ^                         |
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+                               |
     ]], nil, nil, function()
       eq({{
         content = { { {}, "xx3" } },
@@ -338,16 +428,45 @@ describe('external cmdline', function()
     block = {}
     command("redraw!")
     screen:expect([[
-                               |
-      {1:~                        }|
-      {1:~                        }|
-      {1:~                        }|
       ^                         |
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+                               |
     ]], nil, nil, function()
       eq({ { { {}, 'function Foo()'} },
            { { {}, '  line1'} } }, block)
     end)
 
+    feed('endfunction<cr>')
+    screen:expect([[
+      ^                         |
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+                               |
+    ]], nil, nil, function()
+      eq(nil, block)
+    end)
+
+    -- Try once more, to check buffer is reinitialized. #8007
+    feed(':function Bar()<cr>')
+    screen:expect([[
+      ^                         |
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+                               |
+    ]], nil, nil, function()
+      eq({{
+        content = { { {}, "" } },
+        firstc = ":",
+        indent = 2,
+        pos = 0,
+        prompt = "",
+      }}, cmdline)
+      eq({ { { {}, 'function Bar()'} } }, block)
+    end)
 
     feed('endfunction<cr>')
     screen:expect([[
@@ -413,9 +532,9 @@ describe('external cmdline', function()
     screen:expect([[
                                |
       {2:[No Name]                }|
-      {1::}make                    |
+      {1::}make^                    |
       {3:[Command Line]           }|
-      ^                         |
+                               |
     ]], nil, nil, function()
       eq({nil, {
         content = { { {}, "yank" } },
@@ -457,11 +576,11 @@ describe('external cmdline', function()
     cmdline = {}
     command("redraw!")
     screen:expect([[
-                               |
-      {1:~                        }|
-      {1:~                        }|
-      {1:~                        }|
       ^                         |
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+                               |
     ]], nil, nil, function()
       eq({{
         content = { { {}, "make" } },

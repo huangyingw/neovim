@@ -1,21 +1,21 @@
-[remote "huangyingw"]
-    url = git@github.com:huangyingw/neovim.git
-    fetch = +refs/heads/*:refs/remotes/huangyingw/*
+[remote "neovim"]
+    url = https://github.com/neovim/neovim.git
+    fetch = +refs/heads/*:refs/remotes/neovim/*
 [remote "github"]
     url = git@github.com:huangyingw/neovim.git
     fetch = +refs/heads/*:refs/remotes/github/*
 [push]
     remote = github
 [gsync]
-    remote = huangyingw
+    remote = neovim
     branch = master
 [merge]
 	allow = true
+[commit]
+    message = n
+[branch "master"]
+    remote = neovim
+    merge = refs/heads/master
 [branch "dev"]
     remote = github
     merge = refs/heads/dev
-[branch "master"]
-    remote = huangyingw
-    merge = refs/heads/master
-[commit]
-	message = n
