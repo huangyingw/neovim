@@ -252,7 +252,7 @@ open_buffer (
     msg_silent = old_msg_silent;
 
     // Help buffer is filtered.
-    if (curbuf->b_help) {
+    if (bt_help(curbuf)) {
       fix_help_buffer();
     }
   } else if (read_stdin) {
@@ -295,6 +295,11 @@ open_buffer (
     unchanged(curbuf, false);
   }
   save_file_ff(curbuf);                 // keep this fileformat
+
+  // Set last_changedtick to avoid triggering a TextChanged autocommand right
+  // after it was added.
+  curbuf->b_last_changedtick = buf_get_changedtick(curbuf);
+  curbuf->b_last_changedtick_pum = buf_get_changedtick(curbuf);
 
   /* require "!" to overwrite the file, because it wasn't read completely */
   if (aborting())
@@ -505,14 +510,20 @@ void close_buffer(win_T *win, buf_T *buf, int action, int abort_if_last)
 
   int nwindows = buf->b_nwindows;
 
-  /* decrease the link count from windows (unless not in any window) */
-  if (buf->b_nwindows > 0)
-    --buf->b_nwindows;
+  // decrease the link count from windows (unless not in any window)
+  if (buf->b_nwindows > 0) {
+    buf->b_nwindows--;
+  }
+
+  if (diffopt_hiddenoff() && !unload_buf && buf->b_nwindows == 0) {
+    diff_buf_delete(buf);   // Clear 'diff' for hidden buffer.
+  }
 
   /* Return when a window is displaying the buffer or when it's not
    * unloaded. */
-  if (buf->b_nwindows > 0 || !unload_buf)
+  if (buf->b_nwindows > 0 || !unload_buf) {
     return;
+  }
 
   if (buf->terminal) {
     terminal_close(buf->terminal, NULL);
@@ -830,8 +841,8 @@ void goto_buffer(exarg_T *eap, int start, int dir, int count)
      * aborting() returns FALSE when closing a window. */
     enter_cleanup(&cs);
 
-    /* Quitting means closing the split window, nothing else. */
-    win_close(curwin, TRUE);
+    // Quitting means closing the split window, nothing else.
+    win_close(curwin, true);
     swap_exists_action = SEA_NONE;
     swap_exists_did_quit = TRUE;
 
@@ -873,7 +884,15 @@ void handle_swap_exists(bufref_T *old_curbuf)
       buf = old_curbuf->br_buf;
     }
     if (buf != NULL) {
+      int old_msg_silent = msg_silent;
+
+      if (shortmess(SHM_FILEINFO)) {
+        msg_silent = 1;  // prevent fileinfo message
+      }
       enter_buffer(buf);
+      // restore msg_silent, so that the command line will be shown
+      msg_silent = old_msg_silent;
+
       if (old_tw != curbuf->b_p_tw) {
         check_colorcolumn(curwin);
       }
@@ -2648,9 +2667,8 @@ buf_T *setaltfname(char_u *ffname, char_u *sfname, linenr_T lnum)
  * Get alternate file name for current window.
  * Return NULL if there isn't any, and give error message if requested.
  */
-char_u *
-getaltfname (
-    int errmsg                     /* give error message */
+char_u * getaltfname(
+    bool errmsg                   // give error message
 )
 {
   char_u      *fname;
@@ -3220,10 +3238,11 @@ int build_stl_str_hl(
   // Get the byte value now, in case we need it below. This is more
   // efficient than making a copy of the line.
   int byteval;
-  if (wp->w_cursor.col > (colnr_T)STRLEN(line_ptr))
+  if (wp->w_cursor.col > (colnr_T)STRLEN(line_ptr)) {
     byteval = 0;
-  else
-    byteval = (*mb_ptr2char)(line_ptr + wp->w_cursor.col);
+  } else {
+    byteval = utf_ptr2char(line_ptr + wp->w_cursor.col);
+  }
 
   int groupdepth = 0;
 
@@ -3603,7 +3622,7 @@ int build_stl_str_hl(
 
       // Store the current buffer number as a string variable
       vim_snprintf((char *)tmp, sizeof(tmp), "%d", curbuf->b_fnum);
-      set_internal_string_var((char_u *)"actual_curbuf", tmp);
+      set_internal_string_var((char_u *)"g:actual_curbuf", tmp);
 
       buf_T *o_curbuf = curbuf;
       win_T *o_curwin = curwin;
@@ -3712,7 +3731,7 @@ int build_stl_str_hl(
 
     case STL_OFFSET_X:
       base = kNumBaseHexadecimal;
-      // fallthrough
+      FALLTHROUGH;
     case STL_OFFSET:
     {
       long l = ml_find_line_or_offset(wp->w_buffer, wp->w_cursor.lnum, NULL);
@@ -3723,7 +3742,7 @@ int build_stl_str_hl(
     }
     case STL_BYTEVAL_X:
       base = kNumBaseHexadecimal;
-      // fallthrough
+      FALLTHROUGH;
     case STL_BYTEVAL:
       num = byteval;
       if (num == NL)
@@ -4514,9 +4533,10 @@ do_arg_all (
     use_firstwin = true;
   }
 
-  for (i = 0; i < count && i < opened_len && !got_int; ++i) {
-    if (alist == &global_alist && i == global_alist.al_ga.ga_len - 1)
-      arg_had_last = TRUE;
+  for (i = 0; i < count && i < opened_len && !got_int; i++) {
+    if (alist == &global_alist && i == global_alist.al_ga.ga_len - 1) {
+      arg_had_last = true;
+    }
     if (opened[i] > 0) {
       /* Move the already present window to below the current window */
       if (curwin->w_arg_idx != i) {
@@ -4640,10 +4660,10 @@ void ex_buffer_all(exarg_T *eap)
           && !ONE_WINDOW
           && !(wp->w_closing || wp->w_buffer->b_locked > 0)
           ) {
-        win_close(wp, FALSE);
-        wpnext = firstwin;              /* just in case an autocommand does
-                                           something strange with windows */
-        tpnext = first_tabpage;         /* start all over...*/
+        win_close(wp, false);
+        wpnext = firstwin;              // just in case an autocommand does
+                                        // something strange with windows
+        tpnext = first_tabpage;         // start all over...
         open_wins = 0;
       } else
         ++open_wins;
@@ -4712,9 +4732,9 @@ void ex_buffer_all(exarg_T *eap)
          * aborting() returns FALSE when closing a window. */
         enter_cleanup(&cs);
 
-        /* User selected Quit at ATTENTION prompt; close this window. */
-        win_close(curwin, TRUE);
-        --open_wins;
+        // User selected Quit at ATTENTION prompt; close this window.
+        win_close(curwin, true);
+        open_wins--;
         swap_exists_action = SEA_NONE;
         swap_exists_did_quit = TRUE;
 
@@ -4919,6 +4939,12 @@ chk_modeline (
   return retval;
 }
 
+// Return true if "buf" is a help buffer.
+bool bt_help(const buf_T *const buf)
+{
+  return buf != NULL && buf->b_help;
+}
+
 /*
  * Return special buffer name.
  * Returns NULL when the buffer has a normal file name.
@@ -5058,13 +5084,16 @@ linenr_T buf_change_sign_type(
     return (linenr_T)0;
 }
 
-int buf_getsigntype(
-        buf_T *buf,
-        linenr_T lnum,
-        int type /* SIGN_ICON, SIGN_TEXT, SIGN_ANY, SIGN_LINEHL */
-        )
+/// Gets a sign from a given line.
+/// In case of multiple signs, returns the most recently placed one.
+///
+/// @param buf Buffer in which to search
+/// @param lnum Line in which to search
+/// @param type Type of sign to look for
+/// @return Identifier of the first matching sign, or 0
+int buf_getsigntype(buf_T *buf, linenr_T lnum, SignType type)
 {
-    signlist_T	*sign;		/* a sign in a b_signlist */
+    signlist_T *sign;  // a sign in a b_signlist
 
     for (sign = buf->b_signlist; sign != NULL; sign = sign->next) {
         if (sign->lnum == lnum
@@ -5072,7 +5101,9 @@ int buf_getsigntype(
                     || (type == SIGN_TEXT
                         && sign_get_text(sign->typenr) != NULL)
                     || (type == SIGN_LINEHL
-                        && sign_get_attr(sign->typenr, TRUE) != 0))) {
+                        && sign_get_attr(sign->typenr, SIGN_LINEHL) != 0)
+                    || (type == SIGN_NUMHL
+                        && sign_get_attr(sign->typenr, SIGN_NUMHL) != 0))) {
             return sign->typenr;
         }
     }
@@ -5358,6 +5389,45 @@ void bufhl_add_hl_pos_offset(buf_T *buf,
   }
 }
 
+int bufhl_add_virt_text(buf_T *buf,
+                        int src_id,
+                        linenr_T lnum,
+                        VirtText virt_text)
+{
+  static int next_src_id = 1;
+  if (src_id == 0) {
+    src_id = next_src_id++;
+  }
+
+  BufhlLine *lineinfo = bufhl_tree_ref(&buf->b_bufhl_info, lnum, true);
+
+  bufhl_clear_virttext(&lineinfo->virt_text);
+  if (kv_size(virt_text) > 0) {
+    lineinfo->virt_text_src = src_id;
+    lineinfo->virt_text = virt_text;
+  } else {
+    lineinfo->virt_text_src = 0;
+    // currently not needed, but allow a future caller with
+    // 0 size and non-zero capacity
+    kv_destroy(virt_text);
+  }
+
+  if (0 < lnum && lnum <= buf->b_ml.ml_line_count) {
+    changed_lines_buf(buf, lnum, lnum+1, 0);
+    redraw_buf_later(buf, VALID);
+  }
+  return src_id;
+}
+
+static void bufhl_clear_virttext(VirtText *text)
+{
+  for (size_t i = 0; i < kv_size(*text); i++) {
+    xfree(kv_A(*text, i).text);
+  }
+  kv_destroy(*text);
+  *text = (VirtText)KV_INITIAL_VALUE;
+}
+
 /// Clear bufhl highlights from a given source group and range of lines.
 ///
 /// @param buf The buffer to remove highlights from
@@ -5413,6 +5483,7 @@ void bufhl_clear_line_range(buf_T *buf,
 static BufhlLineStatus bufhl_clear_line(BufhlLine *lineinfo, int src_id,
                                         linenr_T lnum)
 {
+  BufhlLineStatus changed = kBLSUnchanged;
   size_t oldsize = kv_size(lineinfo->items);
   if (src_id < 0) {
     kv_size(lineinfo->items) = 0;
@@ -5428,13 +5499,24 @@ static BufhlLineStatus bufhl_clear_line(BufhlLine *lineinfo, int src_id,
     }
     kv_size(lineinfo->items) = newidx;
   }
+  if (kv_size(lineinfo->items) != oldsize) {
+    changed = kBLSChanged;
+  }
 
-  if (kv_size(lineinfo->items) == 0) {
+  if (kv_size(lineinfo->virt_text) != 0
+      && (src_id < 0 || src_id == lineinfo->virt_text_src)) {
+    bufhl_clear_virttext(&lineinfo->virt_text);
+    lineinfo->virt_text_src = 0;
+    changed = kBLSChanged;
+  }
+
+  if (kv_size(lineinfo->items) == 0 && kv_size(lineinfo->virt_text) == 0) {
     kv_destroy(lineinfo->items);
     return kBLSDeleted;
   }
-  return kv_size(lineinfo->items) != oldsize ? kBLSChanged : kBLSUnchanged;
+  return changed;
 }
+
 
 /// Remove all highlights and free the highlight data
 void bufhl_clear_all(buf_T *buf)
@@ -5510,8 +5592,8 @@ bool bufhl_start_line(buf_T *buf, linenr_T lnum, BufhlLineInfo *info)
     return false;
   }
   info->valid_to = -1;
-  info->entries = lineinfo->items;
-  return kv_size(info->entries) > 0;
+  info->line = lineinfo;
+  return true;
 }
 
 /// get highlighting at column col
@@ -5531,8 +5613,8 @@ int bufhl_get_attr(BufhlLineInfo *info, colnr_T col)
   }
   int attr = 0;
   info->valid_to = MAXCOL;
-  for (size_t i = 0; i < kv_size(info->entries); i++) {
-    BufhlItem entry = kv_A(info->entries, i);
+  for (size_t i = 0; i < kv_size(info->line->items); i++) {
+    BufhlItem entry = kv_A(info->line->items, i);
     if (entry.start <= col && col <= entry.stop) {
       int entry_attr = syn_id2attr(entry.hl_id);
       attr = hl_combine_attr(attr, entry_attr);

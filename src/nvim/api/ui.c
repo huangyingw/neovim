@@ -58,6 +58,21 @@ void remote_ui_disconnect(uint64_t channel_id)
   xfree(ui);
 }
 
+/// Wait until ui has connected on stdio channel.
+void remote_ui_wait_for_attach(void)
+  FUNC_API_NOEXPORT
+{
+  Channel *channel = find_channel(CHAN_STDIO);
+  if (!channel) {
+    // this function should only be called in --embed mode, stdio channel
+    // can be assumed.
+    abort();
+  }
+
+  LOOP_PROCESS_EVENTS_UNTIL(&main_loop, channel->events, -1,
+                            pmap_has(uint64_t)(connected_uis, CHAN_STDIO));
+}
+
 void nvim_ui_attach(uint64_t channel_id, Integer width, Integer height,
                     Dictionary options, Error *err)
   FUNC_API_SINCE(1) FUNC_API_REMOTE_ONLY
@@ -112,7 +127,7 @@ void nvim_ui_attach(uint64_t channel_id, Integer width, Integer height,
   }
 
   if (ui->ui_ext[kUIHlState]) {
-    ui->ui_ext[kUINewgrid] = true;
+    ui->ui_ext[kUILinegrid] = true;
   }
 
   UIData *data = xmalloc(sizeof(UIData));
@@ -207,17 +222,16 @@ static void ui_set_option(UI *ui, bool init, String name, Object value,
     if (strequal(name.data, ui_ext_names[i])
         || (i == kUIPopupmenu && is_popupmenu)) {
       if (value.type != kObjectTypeBoolean) {
-        snprintf((char *)IObuff, IOSIZE, "%s must be a Boolean",
-                 name.data);
-        api_set_error(error, kErrorTypeValidation, (char *)IObuff);
+        api_set_error(error, kErrorTypeValidation, "%s must be a Boolean",
+                      name.data);
         return;
       }
       bool boolval = value.data.boolean;
-      if (!init && i == kUINewgrid && boolval != ui->ui_ext[i]) {
+      if (!init && i == kUILinegrid && boolval != ui->ui_ext[i]) {
         // There shouldn't be a reason for an UI to do this ever
         // so explicitly don't support this.
         api_set_error(error, kErrorTypeValidation,
-                      "ext_newgrid option cannot be changed");
+                      "ext_linegrid option cannot be changed");
       }
       ui->ui_ext[i] = boolval;
       if (!init) {
@@ -257,10 +271,10 @@ static void push_call(UI *ui, const char *name, Array args)
 static void remote_ui_grid_clear(UI *ui, Integer grid)
 {
   Array args = ARRAY_DICT_INIT;
-  if (ui->ui_ext[kUINewgrid]) {
+  if (ui->ui_ext[kUILinegrid]) {
     ADD(args, INTEGER_OBJ(grid));
   }
-  const char *name = ui->ui_ext[kUINewgrid] ? "grid_clear" : "clear";
+  const char *name = ui->ui_ext[kUILinegrid] ? "grid_clear" : "clear";
   push_call(ui, name, args);
 }
 
@@ -268,12 +282,12 @@ static void remote_ui_grid_resize(UI *ui, Integer grid,
                                   Integer width, Integer height)
 {
   Array args = ARRAY_DICT_INIT;
-  if (ui->ui_ext[kUINewgrid]) {
+  if (ui->ui_ext[kUILinegrid]) {
     ADD(args, INTEGER_OBJ(grid));
   }
   ADD(args, INTEGER_OBJ(width));
   ADD(args, INTEGER_OBJ(height));
-  const char *name = ui->ui_ext[kUINewgrid] ? "grid_resize" : "resize";
+  const char *name = ui->ui_ext[kUILinegrid] ? "grid_resize" : "resize";
   push_call(ui, name, args);
 }
 
@@ -281,7 +295,7 @@ static void remote_ui_grid_scroll(UI *ui, Integer grid, Integer top,
                                   Integer bot, Integer left, Integer right,
                                   Integer rows, Integer cols)
 {
-  if (ui->ui_ext[kUINewgrid]) {
+  if (ui->ui_ext[kUILinegrid]) {
     Array args = ARRAY_DICT_INIT;
     ADD(args, INTEGER_OBJ(grid));
     ADD(args, INTEGER_OBJ(top));
@@ -327,7 +341,7 @@ static void remote_ui_default_colors_set(UI *ui, Integer rgb_fg,
   push_call(ui, "default_colors_set", args);
 
   // Deprecated
-  if (!ui->ui_ext[kUINewgrid]) {
+  if (!ui->ui_ext[kUILinegrid]) {
     args = (Array)ARRAY_DICT_INIT;
     ADD(args, INTEGER_OBJ(ui->rgb ? rgb_fg : cterm_fg - 1));
     push_call(ui, "update_fg", args);
@@ -345,18 +359,14 @@ static void remote_ui_default_colors_set(UI *ui, Integer rgb_fg,
 static void remote_ui_hl_attr_define(UI *ui, Integer id, HlAttrs rgb_attrs,
                                      HlAttrs cterm_attrs, Array info)
 {
-  if (!ui->ui_ext[kUINewgrid]) {
+  if (!ui->ui_ext[kUILinegrid]) {
     return;
   }
   Array args = ARRAY_DICT_INIT;
 
   ADD(args, INTEGER_OBJ(id));
-
-  Dictionary rgb_hl = hlattrs2dict(&rgb_attrs, true);
-  ADD(args, DICTIONARY_OBJ(rgb_hl));
-
-  Dictionary cterm_hl = hlattrs2dict(&cterm_attrs, false);
-  ADD(args, DICTIONARY_OBJ(cterm_hl));
+  ADD(args, DICTIONARY_OBJ(hlattrs2dict(rgb_attrs, true)));
+  ADD(args, DICTIONARY_OBJ(hlattrs2dict(cterm_attrs, false)));
 
   if (ui->ui_ext[kUIHlState]) {
     ADD(args, ARRAY_OBJ(copy_array(info)));
@@ -372,21 +382,12 @@ static void remote_ui_highlight_set(UI *ui, int id)
   Array args = ARRAY_DICT_INIT;
   UIData *data = ui->data;
 
-  HlAttrs attrs = HLATTRS_INIT;
 
   if (data->hl_id == id) {
     return;
   }
   data->hl_id = id;
-
-  if (id != 0) {
-    HlAttrs *aep = syn_attr2entry(id);
-    if (aep) {
-      attrs = *aep;
-    }
-  }
-
-  Dictionary hl = hlattrs2dict(&attrs, ui->rgb);
+  Dictionary hl = hlattrs2dict(syn_attr2entry(id), ui->rgb);
 
   ADD(args, DICTIONARY_OBJ(hl));
   push_call(ui, "highlight_set", args);
@@ -396,7 +397,7 @@ static void remote_ui_highlight_set(UI *ui, int id)
 static void remote_ui_grid_cursor_goto(UI *ui, Integer grid, Integer row,
                                        Integer col)
 {
-  if (ui->ui_ext[kUINewgrid]) {
+  if (ui->ui_ext[kUILinegrid]) {
     Array args = ARRAY_DICT_INIT;
     ADD(args, INTEGER_OBJ(grid));
     ADD(args, INTEGER_OBJ(row));
@@ -437,10 +438,11 @@ static void remote_ui_put(UI *ui, const char *cell)
 static void remote_ui_raw_line(UI *ui, Integer grid, Integer row,
                                Integer startcol, Integer endcol,
                                Integer clearcol, Integer clearattr,
-                               const schar_T *chunk, const sattr_T *attrs)
+                               Boolean wrap, const schar_T *chunk,
+                               const sattr_T *attrs)
 {
   UIData *data = ui->data;
-  if (ui->ui_ext[kUINewgrid]) {
+  if (ui->ui_ext[kUILinegrid]) {
     Array args = ARRAY_DICT_INIT;
     ADD(args, INTEGER_OBJ(grid));
     ADD(args, INTEGER_OBJ(row));
@@ -506,26 +508,24 @@ static void remote_ui_flush(UI *ui)
 {
   UIData *data = ui->data;
   if (data->buffer.size > 0) {
-    if (!ui->ui_ext[kUINewgrid]) {
+    if (!ui->ui_ext[kUILinegrid]) {
       remote_ui_cursor_goto(ui, data->cursor_row, data->cursor_col);
     }
+    push_call(ui, "flush", (Array)ARRAY_DICT_INIT);
     rpc_send_event(data->channel_id, "redraw", data->buffer);
     data->buffer = (Array)ARRAY_DICT_INIT;
   }
 }
 
-static void remote_ui_cmdline_show(UI *ui, Array args)
+static Array translate_contents(UI *ui, Array contents)
 {
-  Array new_args = ARRAY_DICT_INIT;
-  Array contents = args.items[0].data.array;
   Array new_contents = ARRAY_DICT_INIT;
   for (size_t i = 0; i < contents.size; i++) {
     Array item = contents.items[i].data.array;
     Array new_item = ARRAY_DICT_INIT;
     int attr = (int)item.items[0].data.integer;
     if (attr) {
-      HlAttrs *aep = syn_attr2entry(attr);
-      Dictionary rgb_attrs = hlattrs2dict(aep, ui->rgb ? kTrue : kFalse);
+      Dictionary rgb_attrs = hlattrs2dict(syn_attr2entry(attr), ui->rgb);
       ADD(new_item, DICTIONARY_OBJ(rgb_attrs));
     } else {
       ADD(new_item, DICTIONARY_OBJ((Dictionary)ARRAY_DICT_INIT));
@@ -533,23 +533,48 @@ static void remote_ui_cmdline_show(UI *ui, Array args)
     ADD(new_item, copy_object(item.items[1]));
     ADD(new_contents, ARRAY_OBJ(new_item));
   }
-  ADD(new_args, ARRAY_OBJ(new_contents));
+  return new_contents;
+}
+
+static Array translate_firstarg(UI *ui, Array args)
+{
+  Array new_args = ARRAY_DICT_INIT;
+  Array contents = args.items[0].data.array;
+
+  ADD(new_args, ARRAY_OBJ(translate_contents(ui, contents)));
   for (size_t i = 1; i < args.size; i++) {
     ADD(new_args, copy_object(args.items[i]));
   }
-  push_call(ui, "cmdline_show", new_args);
+  return new_args;
 }
 
 static void remote_ui_event(UI *ui, char *name, Array args, bool *args_consumed)
 {
-  if (!ui->ui_ext[kUINewgrid]) {
-    // the representation of cmdline_show changed, translate back
+  if (!ui->ui_ext[kUILinegrid]) {
+    // the representation of highlights in cmdline changed, translate back
+    // never consumes args
     if (strequal(name, "cmdline_show")) {
-      remote_ui_cmdline_show(ui, args);
-      // never consumes args
+      Array new_args = translate_firstarg(ui, args);
+      push_call(ui, name, new_args);
+      return;
+    } else if (strequal(name, "cmdline_block_show")) {
+      Array new_args = ARRAY_DICT_INIT;
+      Array block = args.items[0].data.array;
+      Array new_block = ARRAY_DICT_INIT;
+      for (size_t i = 0; i < block.size; i++) {
+        ADD(new_block,
+            ARRAY_OBJ(translate_contents(ui, block.items[i].data.array)));
+      }
+      ADD(new_args, ARRAY_OBJ(new_block));
+      push_call(ui, name, new_args);
+      return;
+    } else if (strequal(name, "cmdline_block_append")) {
+      Array new_args = translate_firstarg(ui, args);
+      push_call(ui, name, new_args);
       return;
     }
   }
+
   Array my_args = ARRAY_DICT_INIT;
   // Objects are currently single-reference
   // make a copy, but only if necessary

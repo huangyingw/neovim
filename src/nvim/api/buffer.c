@@ -13,6 +13,7 @@
 #include "nvim/api/private/defs.h"
 #include "nvim/vim.h"
 #include "nvim/buffer.h"
+#include "nvim/charset.h"
 #include "nvim/cursor.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
@@ -31,17 +32,38 @@
 # include "api/buffer.c.generated.h"
 #endif
 
+
+/// \defgroup api-buffer
+///
+/// Unloaded Buffers:~
+///
+/// Buffers may be unloaded by the |:bunload| command or the buffer's
+/// |'bufhidden'| option. When a buffer is unloaded its file contents are freed
+/// from memory and vim cannot operate on the buffer lines until it is reloaded
+/// (usually by opening the buffer again in a new window). API methods such as
+/// |nvim_buf_get_lines()| and |nvim_buf_line_count()| will be affected.
+///
+/// You can use |nvim_buf_is_loaded()| or |nvim_buf_line_count()| to check
+/// whether a buffer is loaded.
+
+
 /// Gets the buffer line count
 ///
 /// @param buffer   Buffer handle
 /// @param[out] err Error details, if any
-/// @return Line count
+/// @return Line count, or \`0` if the buffer has been unloaded (see
+///         |api-buffer|).
 Integer nvim_buf_line_count(Buffer buffer, Error *err)
   FUNC_API_SINCE(1)
 {
   buf_T *buf = find_buffer_by_handle(buffer, err);
 
   if (!buf) {
+    return 0;
+  }
+
+  // return sentinel value if the buffer isn't loaded
+  if (buf->b_ml.ml_mfp == NULL) {
     return 0;
   }
 
@@ -205,7 +227,8 @@ ArrayOf(String) buffer_get_line_slice(Buffer buffer,
 /// @param end              Last line index (exclusive)
 /// @param strict_indexing  Whether out-of-bounds should be an error.
 /// @param[out] err         Error details, if any
-/// @return Array of lines
+/// @return Array of lines. If the buffer has been unloaded then an empty array
+///                         will be returned instead. (See |api-buffer|.)
 ArrayOf(String) nvim_buf_get_lines(uint64_t channel_id,
                                    Buffer buffer,
                                    Integer start,
@@ -218,6 +241,11 @@ ArrayOf(String) nvim_buf_get_lines(uint64_t channel_id,
   buf_T *buf = find_buffer_by_handle(buffer, err);
 
   if (!buf) {
+    return rv;
+  }
+
+  // return sentinel value if the buffer isn't loaded
+  if (buf->b_ml.ml_mfp == NULL) {
     return rv;
   }
 
@@ -745,10 +773,27 @@ void nvim_buf_set_name(Buffer buffer, String name, Error *err)
   }
 }
 
-/// Checks if a buffer is valid
+/// Checks if a buffer is valid and loaded. See |api-buffer| for more info
+/// about unloaded buffers.
 ///
 /// @param buffer Buffer handle
-/// @return true if the buffer is valid, false otherwise
+/// @return true if the buffer is valid and loaded, false otherwise.
+Boolean nvim_buf_is_loaded(Buffer buffer)
+  FUNC_API_SINCE(5)
+{
+  Error stub = ERROR_INIT;
+  buf_T *buf = find_buffer_by_handle(buffer, &stub);
+  api_clear_error(&stub);
+  return buf && buf->b_ml.ml_mfp != NULL;
+}
+
+/// Checks if a buffer is valid.
+///
+/// @note Even if a buffer is valid it may have been unloaded. See |api-buffer|
+/// for more info about unloaded buffers.
+///
+/// @param buffer Buffer handle
+/// @return true if the buffer is valid, false otherwise.
 Boolean nvim_buf_is_valid(Buffer buffer)
   FUNC_API_SINCE(1)
 {
@@ -889,7 +934,7 @@ Integer nvim_buf_add_highlight(Buffer buffer,
   return src_id;
 }
 
-/// Clears highlights from a given source group and a range of lines
+/// Clears highlights and virtual text from a given source id and range of lines
 ///
 /// To clear a source group in the entire buffer, pass in 0 and -1 to
 /// line_start and line_end respectively.
@@ -921,6 +966,89 @@ void nvim_buf_clear_highlight(Buffer buffer,
   }
 
   bufhl_clear_line_range(buf, (int)src_id, (int)line_start+1, (int)line_end);
+}
+
+
+/// Set the virtual text (annotation) for a buffer line.
+///
+/// By default (and currently the only option) the text will be placed after
+/// the buffer text. Virtual text will never cause reflow, rather virtual
+/// text will be truncated at the end of the screen line. The virtual text will
+/// begin after one cell to the right of the ordinary text, this will contain
+/// the |lcs-eol| char if set, otherwise just be a space.
+///
+/// The same src_id can be used for both virtual text and highlights added by
+/// nvim_buf_add_highlight. Virtual text is cleared using
+/// nvim_buf_clear_highlight.
+///
+/// @param buffer     Buffer handle
+/// @param src_id     Source group to use or 0 to use a new group,
+///                   or -1 for a ungrouped annotation
+/// @param line       Line to annotate with virtual text (zero-indexed)
+/// @param chunks     A list of [text, hl_group] arrays, each representing a
+///                   text chunk with specified highlight. `hl_group` element
+///                   can be omitted for no highlight.
+/// @param opts       Optional parameters. Currently not used.
+/// @param[out] err   Error details, if any
+/// @return The src_id that was used
+Integer nvim_buf_set_virtual_text(Buffer buffer,
+                                  Integer src_id,
+                                  Integer line,
+                                  Array chunks,
+                                  Dictionary opts,
+                                  Error *err)
+  FUNC_API_SINCE(5)
+{
+  buf_T *buf = find_buffer_by_handle(buffer, err);
+  if (!buf) {
+    return 0;
+  }
+
+  if (line < 0 || line >= MAXLNUM) {
+    api_set_error(err, kErrorTypeValidation, "Line number outside range");
+    return 0;
+  }
+
+  if (opts.size > 0) {
+    api_set_error(err, kErrorTypeValidation, "opts dict isn't empty");
+    return 0;
+  }
+
+  VirtText virt_text = KV_INITIAL_VALUE;
+  for (size_t i = 0; i < chunks.size; i++) {
+    if (chunks.items[i].type != kObjectTypeArray) {
+      api_set_error(err, kErrorTypeValidation, "Chunk is not an array");
+      goto free_exit;
+    }
+    Array chunk = chunks.items[i].data.array;
+    if (chunk.size == 0 || chunk.size > 2
+        || chunk.items[0].type != kObjectTypeString
+        || (chunk.size == 2 && chunk.items[1].type != kObjectTypeString)) {
+      api_set_error(err, kErrorTypeValidation,
+                    "Chunk is not an array with one or two strings");
+      goto free_exit;
+    }
+
+    String str = chunk.items[0].data.string;
+    char *text = transstr(str.size > 0 ? str.data : "");  // allocates
+
+    int hl_id = 0;
+    if (chunk.size == 2) {
+      String hl = chunk.items[1].data.string;
+      if (hl.size > 0) {
+        hl_id = syn_check_group((char_u *)hl.data, (int)hl.size);
+      }
+    }
+    kv_push(virt_text, ((VirtTextChunk){ .text = text, .hl_id = hl_id }));
+  }
+
+  src_id = bufhl_add_virt_text(buf, (int)src_id, (linenr_T)line+1,
+                               virt_text);
+  return src_id;
+
+free_exit:
+  kv_destroy(virt_text);
+  return 0;
 }
 
 // Check if deleting lines made the cursor position invalid.

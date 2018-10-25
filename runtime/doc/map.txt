@@ -1208,6 +1208,7 @@ By default, the arguments of user defined commands do not undergo completion.
 However, by specifying one or the other of the following attributes, argument
 completion can be enabled:
 
+	-complete=arglist	file names in argument list
 	-complete=augroup	autocmd groups
 	-complete=buffer	buffer names
 	-complete=behave	:behave suboptions
@@ -1227,6 +1228,7 @@ completion can be enabled:
 	-complete=highlight	highlight groups
 	-complete=history	:history suboptions
 	-complete=locale	locale names (as output of locale -a)
+	-complete=mapclear	buffer argument
 	-complete=mapping	mapping name
 	-complete=menu		menus
 	-complete=messages	|:messages| suboptions
@@ -1363,6 +1365,8 @@ The valid escape sequences are
 	<line1>	The starting line of the command range.
 						*<line2>*
 	<line2>	The final line of the command range.
+						*<range>*
+	<range> The number of items in the command range: 0, 1 or 2
 						*<count>*
 	<count>	Any count supplied (as described for the '-range'
 		and '-count' attributes).

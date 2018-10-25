@@ -14,7 +14,7 @@ $nvimCmakeVars = @{
 }
 
 # For pull requests, skip some build configurations to save time.
-if ($env:APPVEYOR_PULL_REQUEST_HEAD_COMMIT -and $env:CONFIGURATION -match '^(MSVC_64|MINGW_32)$') {
+if ($env:APPVEYOR_PULL_REQUEST_HEAD_COMMIT -and $env:CONFIGURATION -match '^(MSVC_64|MINGW_32|MINGW_64-gcov)$') {
   exit 0
 }
 
@@ -103,7 +103,7 @@ $failed = $false
 Set-PSDebug -Off
 cmake --build . --config $cmakeBuildType --target functionaltest -- $cmakeGeneratorArgs 2>&1 |
   foreach { $failed = $failed -or
-    $_ -match 'Running functional tests failed with error'; $_ }
+    $_ -match 'functional tests failed with error'; $_ }
 Set-PSDebug -Trace 1
 if ($failed) {
   exit $LastExitCode

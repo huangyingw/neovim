@@ -123,7 +123,7 @@ void do_debug(char_u *cmd)
   int save_msg_scroll = msg_scroll;
   int save_State = State;
   int save_did_emsg = did_emsg;
-  int save_cmd_silent = cmd_silent;
+  const bool save_cmd_silent = cmd_silent;
   int save_msg_silent = msg_silent;
   int save_emsg_silent = emsg_silent;
   int save_redir_off = redir_off;
@@ -1209,7 +1209,7 @@ int autowrite(buf_T *buf, int forceit)
   return r;
 }
 
-/// flush all buffers, except the ones that are readonly
+/// Flush all buffers, except the ones that are readonly or are never written.
 void autowrite_all(void)
 {
   if (!(p_aw || p_awa) || !p_write) {
@@ -1217,7 +1217,7 @@ void autowrite_all(void)
   }
 
   FOR_ALL_BUFFERS(buf) {
-    if (bufIsChanged(buf) && !buf->b_p_ro) {
+    if (bufIsChanged(buf) && !buf->b_p_ro && !bt_dontwrite(buf)) {
       bufref_T bufref;
       set_bufref(&bufref, buf);
       (void)buf_write_all(buf, false);
@@ -1279,15 +1279,13 @@ bool check_changed(buf_T *buf, int flags)
 ///
 /// @param buf
 /// @param checkall may abandon all changed buffers
-void dialog_changed(buf_T *buf, int checkall)
+void dialog_changed(buf_T *buf, bool checkall)
 {
   char_u buff[DIALOG_MSG_SIZE];
   int ret;
   exarg_T ea;
 
-  dialog_msg(buff, _("Save changes to \"%s\"?"),
-             (buf->b_fname != NULL) ?
-             buf->b_fname : (char_u *)_("Untitled"));
+  dialog_msg(buff, _("Save changes to \"%s\"?"), buf->b_fname);
   if (checkall) {
     ret = vim_dialog_yesnoallcancel(VIM_QUESTION, NULL, buff, 1);
   } else {
@@ -2254,6 +2252,15 @@ static int alist_add_list(int count, char_u **files, int after)
   }
 }
 
+// Function given to ExpandGeneric() to obtain the possible arguments of the
+// argedit and argdelete commands.
+char_u *get_arglist_name(expand_T *xp FUNC_ATTR_UNUSED, int idx)
+{
+  if (idx >= ARGCOUNT) {
+    return NULL;
+  }
+  return alist_name(&ARGLIST[idx]);
+}
 
 /// ":compiler[!] {name}"
 void ex_compiler(exarg_T *eap)
@@ -2719,6 +2726,7 @@ void ex_packadd(exarg_T *eap)
 /// ":options"
 void ex_options(exarg_T *eap)
 {
+  vim_setenv("OPTWIN_CMD", cmdmod.tab ? "tab" : "");
   cmd_source((char_u *)SYS_OPTWIN_FILE, NULL);
 }
 

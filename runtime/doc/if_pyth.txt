@@ -4,7 +4,7 @@
 		  VIM REFERENCE MANUAL    by Paul Moore
 
 
-The Python Interface to Vim				*python* *Python*
+The Python Interface to Vim				*if_pyth* *python* *Python*
 
 See |provider-python| for more information. {Nvim}
 
@@ -118,7 +118,7 @@ Instead, put the Python command in a function and call that function:
 Note that "EOF" must be at the start of the line.
 
 ==============================================================================
-2. The vim module					*python-vim*
+2. The vim module					*python-vim* *python2*
 
 Python code gets all of its access to vim (with one exception - see
 |python-output| below) via the "vim" module.  The vim module implements two

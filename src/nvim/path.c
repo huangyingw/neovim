@@ -1770,7 +1770,7 @@ void path_fix_case(char_u *name)
   }
 
   // Open the directory where the file is located.
-  char_u *slash = vim_strrchr(name, '/');
+  char_u *slash = STRRCHR(name, '/');
   char_u *tail;
   Directory dir;
   bool ok;
@@ -1819,7 +1819,7 @@ void path_fix_case(char_u *name)
 int after_pathsep(const char *b, const char *p)
 {
   return p > b && vim_ispathsep(p[-1])
-         && (!has_mbyte || (*mb_head_off)((char_u *)b, (char_u *)p - 1) == 0);
+         && utf_head_off((char_u *)b, (char_u *)p - 1) == 0;
 }
 
 /*
@@ -2213,10 +2213,10 @@ static int path_to_absolute(const char_u *fname, char_u *buf, size_t len,
 
   // expand it if forced or not an absolute path
   if (force || !path_is_absolute(fname)) {
-    p = vim_strrchr(fname, '/');
+    p = STRRCHR(fname, '/');
 #ifdef WIN32
     if (p == NULL) {
-      p = vim_strrchr(fname, '\\');
+      p = STRRCHR(fname, '\\');
     }
 #endif
     if (p != NULL) {

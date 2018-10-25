@@ -94,6 +94,7 @@ typedef struct {
 typedef struct window_S win_T;
 typedef struct wininfo_S wininfo_T;
 typedef struct frame_S frame_T;
+typedef uint16_t disptick_T;  // display tick type
 
 // for struct memline (it needs memfile_T)
 #include "nvim/memline_defs.h"
@@ -425,7 +426,7 @@ typedef struct {
   synstate_T  *b_sst_firstfree;
   int b_sst_freecount;
   linenr_T b_sst_check_lnum;
-  uint16_t b_sst_lasttick;      /* last display tick */
+  disptick_T b_sst_lasttick;    // last display tick
 
   // for spell checking
   garray_T b_langp;             // list of pointers to slang_T, see spell.c
@@ -982,9 +983,11 @@ struct window_S {
                                        used to try to stay in the same column
                                        for up/down cursor motions. */
 
-  int w_set_curswant;               /* If set, then update w_curswant the next
-                                       time through cursupdate() to the
-                                       current virtual column */
+  int w_set_curswant;               // If set, then update w_curswant the next
+                                    // time through cursupdate() to the
+                                    // current virtual column
+
+  linenr_T w_last_cursorline;       ///< where last 'cursorline' was drawn
 
   // the next seven are used to update the visual part
   char w_old_visual_mode;           ///< last known VIsual_mode

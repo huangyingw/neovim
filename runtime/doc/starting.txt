@@ -76,7 +76,8 @@ The option arguments may be given in any order.  Single-letter options can be
 combined after one dash.  There can be no option arguments after the "--"
 argument.
 
---help							*-h* *--help*
+--help							*-h* *--help* *-?*
+-?
 -h		Give usage (help) message and exit.
 		See |info-message| about capturing the text.
 
@@ -347,21 +348,37 @@ argument.
 
 							*--embed*
 --embed		Use stdin/stdout as a msgpack-RPC channel, so applications can
-		embed and control Nvim via the |rpc-api|.  Implies |--headless|.
-		Equivalent to: >
+		embed and control Nvim via the |rpc-api|.
+
+		By default nvim will wait for the embedding process to call
+		`nvim_ui_attach` before sourcing startup files and reading
+		buffers.  This is so that UI can show startup messages and
+		possible swap file dialog for the first loaded file.  The
+		process can do requests before the `nvim_ui_attach`, for
+		instance a `nvim_get_api_info` call so that UI features can be
+		safely detected by the UI before attaching.
+
+		See |ui-startup| for more information about UI startup.
+
+		To embed nvim without using the UI protocol, `--headless` should
+		be supplied together with `--embed`. Then initialization is
+		performed without waiting for an UI. This is also equivalent
+		to the following alternative: >
 			nvim --headless --cmd "call stdioopen({'rpc': v:true})"
 <
 		See also |channel-stdio|.
 
 							*--headless*
---headless 	Do not start the default UI, so stdio can be used as an
-		arbitrary communication channel. |channel-stdio|
+--headless 	Start nvim without an UI. The TUI is not used, so stdio
+		can be used as an arbitrary communication channel.
+		|channel-stdio| When used together with `--embed`, do not wait
+		for the embedder to attach an UI.
 
 		Also useful for scripting (tests) to see messages that would
 		not be printed by |-es|.
 
 		To detect if a UI is available, check if |nvim_list_uis()| is
-		empty after |VimEnter|.
+		empty in or after |VimEnter|.
 
 		To read stdin as text, "-" must be given explicitly:
 		--headless cannot assume that stdin is just text. >
@@ -407,9 +424,6 @@ accordingly.  Vim proceeds in this order:
 				(default for $XDG_CONFIG_HOME is ~/.config)
 		Windows		$XDG_CONFIG_HOME/nvim/init.vim
 				(default for $XDG_CONFIG_HOME is ~/AppData/Local)
-
-	The files are searched in the order specified above and only the first
-	one that is found is read.
 
 	RECOMMENDATION: Put all your Vim configuration stuff in the 
 	$HOME/.config/nvim/ directory. That makes it easy to copy it to 
@@ -685,26 +699,24 @@ greps in the help files) you might be able to use this: >
 4. Suspending						*suspend*
 
 					*iconize* *iconise* *CTRL-Z* *v_CTRL-Z*
-CTRL-Z			Suspend Vim, like ":stop".
+CTRL-Z			Suspend Nvim, like ":stop".
 			Works in Normal and in Visual mode.  In Insert and
 			Command-line mode, the CTRL-Z is inserted as a normal
-			character.  In Visual mode Vim goes back to Normal
+			character.  In Visual mode Nvim goes back to Normal
 			mode.
 
 :sus[pend][!]	or			*:sus* *:suspend* *:st* *:stop*
-:st[op][!]		Suspend Vim.  Vim will continue if you make it the
-			foreground job again.
-			If the '!' is not given and 'autowrite' is set, every
+:st[op][!]		Suspend Nvim using OS "job control"; it will continue
+			if you make it the foreground job again.  Triggers
+			|VimSuspend| before suspending and |VimResume| when
+			resumed.
+			If "!" is not given and 'autowrite' is set, every
 			buffer with changes and a file name is written out.
-			If the '!' is given or 'autowrite' is not set, changed
-			buffers are not written, don't forget to bring Vim
+			If "!" is given or 'autowrite' is not set, changed
+			buffers are not written, don't forget to bring Nvim
 			back to the foreground later!
 
 In the GUI, suspending is implementation-defined.
-
-In X-windows the selection is disowned when Vim suspends.  this means you
-can't paste it in another application (since Vim is going to sleep an attempt
-to get the selection would make the program hang).
 
 ==============================================================================
 5. Exiting						*exiting*
@@ -1359,7 +1371,7 @@ file when reading and include:
 9. Standard Paths				*standard-path*
 
 Nvim stores configuration and data in standard locations. Plugins are strongly
-encouraged to follow this pattern also.
+encouraged to follow this pattern also. Use |stdpath()| to get the paths.
 
 						*base-directories* *xdg*
 The "base" (root) directories conform to the XDG Base Directory Specification.
@@ -1367,18 +1379,18 @@ https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
 The $XDG_CONFIG_HOME and $XDG_DATA_HOME environment variables are used if they
 exist, otherwise default values (listed below) are used.
 
+CONFIG DIRECTORY (DEFAULT) ~
+                  *$XDG_CONFIG_HOME*            Nvim: stdpath("config")
+    Unix:         ~/.config                   ~/.config/nvim
+    Windows:      ~/AppData/Local             ~/AppData/Local/nvim
+
+DATA DIRECTORY (DEFAULT) ~
+                  *$XDG_DATA_HOME*              Nvim: stdpath("data")
+    Unix:         ~/.local/share              ~/.local/share/nvim
+    Windows:      ~/AppData/Local             ~/AppData/Local/nvim-data
+
 Note: Throughout the user manual these defaults are used as placeholders, e.g.
 "~/.config" is understood to mean "$XDG_CONFIG_HOME or ~/.config".
-
-CONFIG DIRECTORY				*$XDG_CONFIG_HOME*
-          Base                Nvim ~
-Unix:     ~/.config           ~/.config/nvim
-Windows:  ~/AppData/Local     ~/AppData/Local/nvim
-
-DATA DIRECTORY					*$XDG_DATA_HOME*
-          Base                Nvim ~
-Unix:     ~/.local/share      ~/.local/share/nvim
-Windows:  ~/AppData/Local     ~/AppData/Local/nvim-data
 
 LOG FILE					*$NVIM_LOG_FILE*
 Besides 'debug' and 'verbose', Nvim keeps a general log file for internal

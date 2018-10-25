@@ -350,6 +350,7 @@ static void handle_request(Channel *channel, msgpack_object *request)
     }
   } else {
     multiqueue_put(channel->events, on_request_event, 1, evdata);
+    DLOG("RPC: scheduled %.*s", method->via.bin.size, method->via.bin.ptr);
   }
 }
 
@@ -505,6 +506,11 @@ end:
 static void unsubscribe(Channel *channel, char *event)
 {
   char *event_string = pmap_get(cstr_t)(event_strings, event);
+  if (!event_string) {
+      WLOG("RPC: ch %" PRIu64 ": tried to unsubscribe unknown event '%s'",
+           channel->id, event);
+      return;
+  }
   pmap_del(cstr_t)(channel->rpc.subscribed_events, event_string);
 
   map_foreach_value(channels, channel, {
@@ -738,4 +744,3 @@ static void log_msg_close(FILE *f, msgpack_object msg)
   log_unlock();
 }
 #endif
-

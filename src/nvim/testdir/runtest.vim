@@ -67,7 +67,7 @@ lang mess C
 let v:testing = 1
 
 " Support function: get the alloc ID by name.
-function GetAllocId(name)
+func GetAllocId(name)
   exe 'split ' . s:srcdir . '/alloc.h'
   let top = search('typedef enum')
   if top == 0
@@ -79,6 +79,11 @@ function GetAllocId(name)
   endif
   close
   return lnum - top - 1
+endfunc
+
+func CanRunVimInTerminal()
+  " Nvim: always false, we use Lua screen-tests instead.
+  return 0
 endfunc
 
 func RunTheTest(test)
@@ -243,6 +248,7 @@ let s:flaky = [
       \ 'Test_quoteplus()',
       \ 'Test_quotestar()',
       \ 'Test_reltime()',
+      \ 'Test_repeat_three()',
       \ 'Test_terminal_composing_unicode()',
       \ 'Test_terminal_redir_file()',
       \ 'Test_terminal_tmap()',

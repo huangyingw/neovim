@@ -88,7 +88,7 @@ if(MINGW AND CMAKE_GENERATOR MATCHES "Ninja")
   if(NOT MAKE_PRG)
     message(FATAL_ERROR "GNU Make for mingw32 is required to build the dependecies.")
   else()
-    message(STATUS "Found GNU Make for mingw32 at ${MAKE_PRG}")
+    message(STATUS "Found GNU Make for mingw32: ${MAKE_PRG}")
   endif()
 endif()
 
@@ -96,6 +96,10 @@ if(CMAKE_C_COMPILER_ARG1)
   set(DEPS_C_COMPILER "${CMAKE_C_COMPILER} ${CMAKE_C_COMPILER_ARG1}")
 else()
   set(DEPS_C_COMPILER "${CMAKE_C_COMPILER}")
+endif()
+
+if(CMAKE_OSX_SYSROOT)
+  set(DEPS_C_COMPILER "${DEPS_C_COMPILER} -isysroot${CMAKE_OSX_SYSROOT}")
 endif()
 
 # Cross compiling: use these for dependencies built for the
@@ -138,8 +142,8 @@ set(UNIBILIUM_SHA256 78997d38d4c8177c60d3d0c1aa8c53fd0806eb21825b7b335b1768d7116
 set(LIBTERMKEY_URL http://www.leonerd.org.uk/code/libtermkey/libtermkey-0.20.tar.gz)
 set(LIBTERMKEY_SHA256 6c0d87c94ab9915e76ecd313baec08dedf3bd56de83743d9aa923a081935d2f5)
 
-set(LIBVTERM_URL https://github.com/neovim/libvterm/archive/a9c7c6fd20fa35e0ad3e0e98901ca12dfca9c25c.tar.gz)
-set(LIBVTERM_SHA256 1a4272be91d9614dc183a503786df83b6584e4afaab7feaaa5409f841afbd796)
+set(LIBVTERM_URL https://github.com/neovim/libvterm/archive/3f62ac6b7bdffda39d68f723fb1806dfd6d6382d.tar.gz)
+set(LIBVTERM_SHA256 1c8b318370f00f831f43e3ec86a48984250e3ee5c76beb106a421c9a42286ac5)
 
 set(JEMALLOC_URL https://github.com/jemalloc/jemalloc/releases/download/4.5.0/jemalloc-4.5.0.tar.bz2)
 set(JEMALLOC_SHA256 9409d85664b4f135b77518b0b118c549009dc10f6cba14557d170476611f6780)
@@ -147,15 +151,15 @@ set(JEMALLOC_SHA256 9409d85664b4f135b77518b0b118c549009dc10f6cba14557d170476611f
 set(LUV_URL https://github.com/luvit/luv/archive/1.9.1-1.tar.gz)
 set(LUV_SHA256 562b9efaad30aa051a40eac9ade0c3df48bb8186763769abe47ec3fb3edb1268)
 
-set(GPERF_URL https://ftp.gnu.org/pub/gnu/gperf/gperf-3.1.tar.gz)
+set(GPERF_URL https://github.com/neovim/deps/raw/ff5b4b18a87397a8564016071ae64f64bcd8c635/opt/gperf-3.1.tar.gz)
 set(GPERF_SHA256 588546b945bba4b70b6a3a616e80b4ab466e3f33024a352fc2198112cdbb3ae2)
 
 # 7za.exe cat.exe curl.exe ca-bundle.crt diff.exe tee.exe tidy.exe xxd.exe
 set(WINTOOLS_URL https://github.com/neovim/deps/raw/2f9acbecf06365c10baa3c0087f34a54c9c6f949/opt/win32tools.zip)
 set(WINTOOLS_SHA256 8bfce7e3a365721a027ce842f2ec1cf878f1726233c215c05964aac07300798c)
 
-set(WINGUI_URL https://github.com/equalsraf/neovim-qt/releases/download/v0.2.8/neovim-qt.zip)
-set(WINGUI_SHA256 260efc686423e2529360b6a45c8e241fbbf276c8de6b04d44f45ab5b6fe8df8f)
+set(WINGUI_URL https://github.com/equalsraf/neovim-qt/releases/download/v0.2.10/neovim-qt.zip)
+set(WINGUI_SHA256 97988a96994b6066ea2b5f035a633304d664b8a14c91e946c5833a6e3782fdbb)
 
 set(WIN32YANK_X86_URL https://github.com/equalsraf/win32yank/releases/download/v0.0.4/win32yank-x86.zip)
 set(WIN32YANK_X86_SHA256 62f34e5a46c5d4a7b3f3b512e1ff7b77fedd432f42581cbe825233a996eed62c)

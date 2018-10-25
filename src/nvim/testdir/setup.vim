@@ -9,10 +9,13 @@ let s:did_load = 1
 " Align Nvim defaults to Vim.
 set sidescroll=0
 set directory^=.
+set undodir^=.
 set backspace=
+set nrformats+=octal
 set nohidden smarttab noautoindent noautoread complete-=i noruler noshowcmd
 set listchars=eol:$
 set fillchars=vert:\|,fold:-
+set shortmess-=F
 " Prevent Nvim log from writing to stderr.
 let $NVIM_LOG_FILE = exists($NVIM_LOG_FILE) ? $NVIM_LOG_FILE : 'Xnvim.log'
 
@@ -33,4 +36,5 @@ if has('win32')
   let $TERM = ''
   let &shell = empty($COMSPEC) ? exepath('cmd.exe') : $COMSPEC
   set shellcmdflag=/s/c shellxquote=\" shellredir=>%s\ 2>&1
+  let &shellpipe = &shellredir
 endif

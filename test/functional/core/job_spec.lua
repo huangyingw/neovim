@@ -417,7 +417,7 @@ describe('jobs', function()
         \ })
     ]])
 
-    screen:expect("{2:E120: Using <SID> not in a script context: s:OnEvent}",nil,nil,nil,true)
+    screen:expect{any="{2:E120: Using <SID> not in a script context: s:OnEvent}"}
   end)
 
   it('does not repeat output with slow output handlers', function()
@@ -663,7 +663,7 @@ describe('jobs', function()
         call rpcnotify(g:channel, 'wait', jobwait([
         \  jobstart('exit 4'),
         \  jobstart((has('win32') ? 'Start-Sleep 10' : 'sleep 10').'; exit 5'),
-        \  ], has('win32') ? 3000 : 100))
+        \  ], has('win32') ? 6000 : 100))
         ]])
         eq({'notification', 'wait', {{4, -1}}}, next_msg())
       end)
