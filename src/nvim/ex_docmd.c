@@ -53,6 +53,7 @@
 #include "nvim/regexp.h"
 #include "nvim/screen.h"
 #include "nvim/search.h"
+#include "nvim/sign.h"
 #include "nvim/spell.h"
 #include "nvim/spellfile.h"
 #include "nvim/strings.h"
@@ -78,7 +79,7 @@
 static int quitmore = 0;
 static int ex_pressedreturn = FALSE;
 
-/* whether ":lcd" was produced for a session */
+/// Whether ":lcd" or ":tcd" was produced for a session.
 static int did_lcd;
 
 typedef struct ucmd {
@@ -431,8 +432,7 @@ int do_cmdline(char_u *cmdline, LineGetter fgetline,
     if (cstack.cs_looplevel > 0 && current_line < lines_ga.ga_len) {
       /* Each '|' separated command is stored separately in lines_ga, to
        * be able to jump to it.  Don't use next_cmdline now. */
-      xfree(cmdline_copy);
-      cmdline_copy = NULL;
+      XFREE_CLEAR(cmdline_copy);
 
       /* Check if a function has returned or, unless it has an unclosed
        * try conditional, aborted. */
@@ -606,12 +606,11 @@ int do_cmdline(char_u *cmdline, LineGetter fgetline,
       current_line = cmd_loop_cookie.current_line;
 
     if (next_cmdline == NULL) {
-      xfree(cmdline_copy);
-      cmdline_copy = NULL;
-      /*
-       * If the command was typed, remember it for the ':' register.
-       * Do this AFTER executing the command to make :@: work.
-       */
+      XFREE_CLEAR(cmdline_copy);
+      //
+      // If the command was typed, remember it for the ':' register.
+      // Do this AFTER executing the command to make :@: work.
+      //
       if (getline_equal(fgetline, cookie, getexline)
           && new_last_cmdline != NULL) {
         xfree(last_cmdline);
@@ -839,9 +838,10 @@ int do_cmdline(char_u *cmdline, LineGetter fgetline,
       sourcing_lnum = current_exception->throw_lnum;
       current_exception->throw_name = NULL;
 
-      discard_current_exception();              /* uses IObuff if 'verbose' */
-      suppress_errthrow = TRUE;
-      force_abort = TRUE;
+      discard_current_exception();              // uses IObuff if 'verbose'
+      suppress_errthrow = true;
+      force_abort = true;
+      msg_ext_set_kind("emsg");  // kind=emsg for :throw, exceptions. #9993
 
       if (messages != NULL) {
         do {
@@ -1233,7 +1233,7 @@ static char_u * do_one_cmd(char_u **cmdlinep,
   int did_esilent = 0;
   int did_sandbox = FALSE;
   cmdmod_T save_cmdmod;
-  int ni;                                       /* set when Not Implemented */
+  const int save_reg_executing = reg_executing;
   char_u *cmd;
   int address_count = 1;
 
@@ -1762,10 +1762,10 @@ static char_u * do_one_cmd(char_u **cmdlinep,
     goto doend;
   }
 
-  ni = (!IS_USER_CMDIDX(ea.cmdidx)
-        && (cmdnames[ea.cmdidx].cmd_func == ex_ni
-           || cmdnames[ea.cmdidx].cmd_func == ex_script_ni
-    ));
+  // set when Not Implemented
+  const int ni = !IS_USER_CMDIDX(ea.cmdidx)
+    && (cmdnames[ea.cmdidx].cmd_func == ex_ni
+        || cmdnames[ea.cmdidx].cmd_func == ex_script_ni);
 
 
   // Forced commands.
@@ -1804,15 +1804,19 @@ static char_u * do_one_cmd(char_u **cmdlinep,
       errormsg = (char_u *)_(get_text_locked_msg());
       goto doend;
     }
-    /* Disallow editing another buffer when "curbuf_lock" is set.
-     * Do allow ":edit" (check for argument later).
-     * Do allow ":checktime" (it's postponed). */
+
+    // Disallow editing another buffer when "curbuf_lock" is set.
+    // Do allow ":checktime" (it is postponed).
+    // Do allow ":edit" (check for an argument later).
+    // Do allow ":file" with no arguments (check for an argument later).
     if (!(ea.argt & CMDWIN)
-        && ea.cmdidx != CMD_edit
         && ea.cmdidx != CMD_checktime
+        && ea.cmdidx != CMD_edit
+        && ea.cmdidx != CMD_file
         && !IS_USER_CMDIDX(ea.cmdidx)
-        && curbuf_locked())
+        && curbuf_locked()) {
       goto doend;
+    }
 
     if (!ni && !(ea.argt & RANGE) && ea.addr_count > 0) {
       /* no range allowed */
@@ -1884,6 +1888,11 @@ static char_u * do_one_cmd(char_u **cmdlinep,
   else
     ea.arg = skipwhite(p);
 
+  // ":file" cannot be run with an argument when "curbuf_lock" is set
+  if (ea.cmdidx == CMD_file && *ea.arg != NUL && curbuf_locked()) {
+    goto doend;
+  }
+
   /*
    * Check for "++opt=val" argument.
    * Must be first, allow ":w ++enc=utf8 !cmd"
@@ -1939,28 +1948,26 @@ static char_u * do_one_cmd(char_u **cmdlinep,
    * Check for '|' to separate commands and '"' to start comments.
    * Don't do this for ":read !cmd" and ":write !cmd".
    */
-  if ((ea.argt & TRLBAR) && !ea.usefilter)
+  if ((ea.argt & TRLBAR) && !ea.usefilter) {
     separate_nextcmd(&ea);
-
-  /*
-   * Check for <newline> to end a shell command.
-   * Also do this for ":read !cmd", ":write !cmd" and ":global".
-   * Any others?
-   */
-  else if (ea.cmdidx == CMD_bang
-           || ea.cmdidx == CMD_global
-           || ea.cmdidx == CMD_vglobal
-           || ea.usefilter) {
-    for (p = ea.arg; *p; ++p) {
-      /* Remove one backslash before a newline, so that it's possible to
-       * pass a newline to the shell and also a newline that is preceded
-       * with a backslash.  This makes it impossible to end a shell
-       * command in a backslash, but that doesn't appear useful.
-       * Halving the number of backslashes is incompatible with previous
-       * versions. */
-      if (*p == '\\' && p[1] == '\n')
+  } else if (ea.cmdidx == CMD_bang
+             || ea.cmdidx == CMD_terminal
+             || ea.cmdidx == CMD_global
+             || ea.cmdidx == CMD_vglobal
+             || ea.usefilter) {
+    // Check for <newline> to end a shell command.
+    // Also do this for ":read !cmd", ":write !cmd" and ":global".
+    // Any others?
+    for (p = ea.arg; *p; p++) {
+      // Remove one backslash before a newline, so that it's possible to
+      // pass a newline to the shell and also a newline that is preceded
+      // with a backslash.  This makes it impossible to end a shell
+      // command in a backslash, but that doesn't appear useful.
+      // Halving the number of backslashes is incompatible with previous
+      // versions.
+      if (*p == '\\' && p[1] == '\n') {
         STRMOVE(p, p + 1);
-      else if (*p == '\n') {
+      } else if (*p == '\n') {
         ea.nextcmd = p + 1;
         *p = NUL;
         break;
@@ -2149,6 +2156,10 @@ static char_u * do_one_cmd(char_u **cmdlinep,
     case CMD_python:
     case CMD_py3:
     case CMD_python3:
+    case CMD_pythonx:
+    case CMD_pyx:
+    case CMD_pyxdo:
+    case CMD_pyxfile:
     case CMD_return:
     case CMD_rightbelow:
     case CMD_ruby:
@@ -2206,11 +2217,19 @@ static char_u * do_one_cmd(char_u **cmdlinep,
     ea.arg = skipwhite(p);
   }
 
-  /*
-   * 7. Switch on command name.
-   *
-   * The "ea" structure holds the arguments that can be used.
-   */
+  // The :try command saves the emsg_silent flag, reset it here when
+  // ":silent! try" was used, it should only apply to :try itself.
+  if (ea.cmdidx == CMD_try && did_esilent > 0) {
+    emsg_silent -= did_esilent;
+    if (emsg_silent < 0) {
+      emsg_silent = 0;
+    }
+    did_esilent = 0;
+  }
+
+  // 7. Execute the command.
+  //
+  // The "ea" structure holds the arguments that can be used.
   ea.cmdlinep = cmdlinep;
   ea.getline = fgetline;
   ea.cookie = cookie;
@@ -2250,8 +2269,11 @@ static char_u * do_one_cmd(char_u **cmdlinep,
   need_rethrow = check_cstack = FALSE;
 
 doend:
-  if (curwin->w_cursor.lnum == 0)       /* can happen with zero line number */
+  // can happen with zero line number
+  if (curwin->w_cursor.lnum == 0) {
     curwin->w_cursor.lnum = 1;
+    curwin->w_cursor.col = 0;
+  }
 
   if (errormsg != NULL && *errormsg != NUL && !did_emsg) {
     if (flags & DOCMD_VERBOSE) {
@@ -2282,6 +2304,7 @@ doend:
   }
 
   cmdmod = save_cmdmod;
+  reg_executing = save_reg_executing;
 
   if (save_msg_silent != -1) {
     /* messages could be enabled for a serious error, need to check if the
@@ -2427,10 +2450,24 @@ static char_u *find_command(exarg_T *eap, int *full)
       }
     }
 
-    if (ASCII_ISLOWER(*eap->cmd))
-      eap->cmdidx = cmdidxs[CharOrdLow(*eap->cmd)];
-    else
-      eap->cmdidx = cmdidxs[26];
+    if (ASCII_ISLOWER(eap->cmd[0])) {
+      const int c1 = eap->cmd[0];
+      const int c2 = eap->cmd[1];
+
+      if (command_count != (int)CMD_SIZE) {
+        iemsg((char *)_("E943: Command table needs to be updated, run 'make'"));
+        getout(1);
+      }
+
+      // Use a precomputed index for fast look-up in cmdnames[]
+      // taking into account the first 2 letters of eap->cmd.
+      eap->cmdidx = cmdidxs1[CharOrdLow(c1)];
+      if (ASCII_ISLOWER(c2)) {
+        eap->cmdidx += cmdidxs2[CharOrdLow(c1)][CharOrdLow(c2)];
+      }
+    } else {
+      eap->cmdidx = CMD_bang;
+    }
 
     for (; (int)eap->cmdidx < (int)CMD_SIZE;
          eap->cmdidx = (cmdidx_T)((int)eap->cmdidx + 1))
@@ -3222,7 +3259,7 @@ const char * set_one_cmd_context(
   case CMD_tjump:
   case CMD_stjump:
   case CMD_ptjump:
-    if (*p_wop != NUL) {
+    if (wop_flags & WOP_TAGFILE) {
       xp->xp_context = EXPAND_TAGS_LISTFILES;
     } else {
       xp->xp_context = EXPAND_TAGS;
@@ -3686,7 +3723,7 @@ static linenr_T get_address(exarg_T *eap,
         }
         searchcmdlen = 0;
         if (!do_search(NULL, c, cmd, 1L,
-                SEARCH_HIS | SEARCH_MSG, NULL)) {
+                       SEARCH_HIS | SEARCH_MSG, NULL, NULL)) {
           curwin->w_cursor = pos;
           cmd = NULL;
           goto error;
@@ -3721,12 +3758,12 @@ static linenr_T get_address(exarg_T *eap,
         // Start the search just like for the above do_search().
         pos.col = (*cmd != '?') ? MAXCOL : 0;
         pos.coladd = 0;
-        if (searchit(curwin, curbuf, &pos,
+        if (searchit(curwin, curbuf, &pos, NULL,
                      *cmd == '?' ? BACKWARD : FORWARD,
                      (char_u *)"", 1L, SEARCH_MSG,
-                     i, (linenr_T)0, NULL) != FAIL)
+                     i, (linenr_T)0, NULL, NULL) != FAIL) {
           lnum = pos.lnum;
-        else {
+        } else {
           cmd = NULL;
           goto error;
         }
@@ -4091,13 +4128,14 @@ int expand_filename(exarg_T *eap, char_u **cmdlinep, char_u **errormsgp)
     if (!eap->usefilter
         && !escaped
         && eap->cmdidx != CMD_bang
-        && eap->cmdidx != CMD_make
-        && eap->cmdidx != CMD_lmake
         && eap->cmdidx != CMD_grep
-        && eap->cmdidx != CMD_lgrep
         && eap->cmdidx != CMD_grepadd
-        && eap->cmdidx != CMD_lgrepadd
         && eap->cmdidx != CMD_hardcopy
+        && eap->cmdidx != CMD_lgrep
+        && eap->cmdidx != CMD_lgrepadd
+        && eap->cmdidx != CMD_lmake
+        && eap->cmdidx != CMD_make
+        && eap->cmdidx != CMD_terminal
         && !(eap->argt & NOSPC)
         ) {
       char_u      *l;
@@ -4119,8 +4157,10 @@ int expand_filename(exarg_T *eap, char_u **cmdlinep, char_u **errormsgp)
         }
     }
 
-    /* For a shell command a '!' must be escaped. */
-    if ((eap->usefilter || eap->cmdidx == CMD_bang)
+    // For a shell command a '!' must be escaped.
+    if ((eap->usefilter
+         || eap->cmdidx == CMD_bang
+         || eap->cmdidx == CMD_terminal)
         && vim_strpbrk(repl, (char_u *)"!") != NULL) {
       char_u      *l;
 
@@ -4475,8 +4515,8 @@ static int get_tabpage_arg(exarg_T *eap)
       tab_number = 0;
     } else {
       tab_number = eap->line2;
-      if (!unaccept_arg0 && **eap->cmdlinep == '-') {
-        --tab_number;
+      if (!unaccept_arg0 && *skipwhite(*eap->cmdlinep) == '-') {
+        tab_number--;
         if (tab_number < unaccept_arg0) {
           eap->errmsg = e_invarg;
         }
@@ -4811,10 +4851,8 @@ static int uc_add_command(char_u *name, size_t name_len, char_u *rep,
         goto fail;
       }
 
-      xfree(cmd->uc_rep);
-      cmd->uc_rep = NULL;
-      xfree(cmd->uc_compl_arg);
-      cmd->uc_compl_arg = NULL;
+      XFREE_CLEAR(cmd->uc_rep);
+      XFREE_CLEAR(cmd->uc_compl_arg);
       break;
     }
 
@@ -5476,24 +5514,18 @@ uc_check_code(
       break;
     case 1:     /* Quote, but don't split */
       result = STRLEN(eap->arg) + 2;
-      for (p = eap->arg; *p; ++p) {
-        if (enc_dbcs != 0 && (*mb_ptr2len)(p) == 2)
-          /* DBCS can contain \ in a trail byte, skip the
-           * double-byte character. */
-          ++p;
-        else if (*p == '\\' || *p == '"')
-          ++result;
+      for (p = eap->arg; *p; p++) {
+        if (*p == '\\' || *p == '"') {
+          result++;
+        }
       }
 
       if (buf != NULL) {
         *buf++ = '"';
-        for (p = eap->arg; *p; ++p) {
-          if (enc_dbcs != 0 && (*mb_ptr2len)(p) == 2)
-            /* DBCS can contain \ in a trail byte, copy the
-             * double-byte character to avoid escaping. */
-            *buf++ = *p++;
-          else if (*p == '\\' || *p == '"')
+        for (p = eap->arg; *p; p++) {
+          if (*p == '\\' || *p == '"') {
             *buf++ = '\\';
+          }
           *buf++ = *p;
         }
         *buf = '"';
@@ -6163,7 +6195,7 @@ static void ex_pclose(exarg_T *eap)
  * Close window "win" and take care of handling closing the last window for a
  * modified buffer.
  */
-static void
+void
 ex_win_close(
     int forceit,
     win_T *win,
@@ -6272,6 +6304,9 @@ void tabpage_close(int forceit)
 {
   // First close all the windows but the current one.  If that worked then
   // close the last window in this tab, that will close it.
+  while (curwin->w_floating) {
+    ex_win_close(forceit, curwin, NULL);
+  }
   if (!ONE_WINDOW) {
     close_others(true, forceit);
   }
@@ -6296,8 +6331,8 @@ void tabpage_close_other(tabpage_T *tp, int forceit)
   /* Limit to 1000 windows, autocommands may add a window while we close
    * one.  OK, so I'm paranoid... */
   while (++done < 1000) {
-    sprintf((char *)prev_idx, "%i", tabpage_index(tp));
-    wp = tp->tp_firstwin;
+    snprintf((char *)prev_idx, sizeof(prev_idx), "%i", tabpage_index(tp));
+    wp = tp->tp_lastwin;
     ex_win_close(forceit, wp, tp);
 
     /* Autocommands may delete the tab page under our fingers and we may
@@ -6318,6 +6353,7 @@ static void ex_only(exarg_T *eap)
 {
   win_T *wp;
   int wnr;
+
   if (eap->addr_count > 0) {
     wnr = eap->line2;
     for (wp = firstwin; --wnr > 0;) {
@@ -6326,6 +6362,10 @@ static void ex_only(exarg_T *eap)
       else
         wp = wp->w_next;
     }
+  } else {
+    wp = curwin;
+  }
+  if (wp != curwin) {
     win_goto(wp);
   }
   close_others(TRUE, eap->forceit);
@@ -6888,10 +6928,11 @@ static void ex_resize(exarg_T *eap)
       n = 9999;
     win_setwidth_win(n, wp);
   } else {
-    if (*eap->arg == '-' || *eap->arg == '+')
+    if (*eap->arg == '-' || *eap->arg == '+') {
       n += curwin->w_height;
-    else if (n == 0 && eap->arg[0] == NUL)      /* default is very wide */
+    } else if (n == 0 && eap->arg[0] == NUL) {  // default is very high
       n = 9999;
+    }
     win_setheight_win(n, wp);
   }
 }
@@ -7180,10 +7221,11 @@ static void ex_read(exarg_T *eap)
         else
           lnum = 1;
         if (*ml_get(lnum) == NUL && u_savedel(lnum, 1L) == OK) {
-          ml_delete(lnum, FALSE);
+          ml_delete(lnum, false);
           if (curwin->w_cursor.lnum > 1
-              && curwin->w_cursor.lnum >= lnum)
-            --curwin->w_cursor.lnum;
+              && curwin->w_cursor.lnum >= lnum) {
+            curwin->w_cursor.lnum--;
+          }
           deleted_lines_mark(lnum, 1L);
         }
       }
@@ -7197,11 +7239,8 @@ static char_u   *prev_dir = NULL;
 #if defined(EXITFREE)
 void free_cd_dir(void)
 {
-  xfree(prev_dir);
-  prev_dir = NULL;
-
-  xfree(globaldir);
-  globaldir = NULL;
+  XFREE_CLEAR(prev_dir);
+  XFREE_CLEAR(globaldir);
 }
 
 #endif
@@ -7209,16 +7248,14 @@ void free_cd_dir(void)
 /// Deal with the side effects of changing the current directory.
 ///
 /// @param scope  Scope of the function call (global, tab or window).
-void post_chdir(CdScope scope)
+void post_chdir(CdScope scope, bool trigger_dirchanged)
 {
   // Always overwrite the window-local CWD.
-  xfree(curwin->w_localdir);
-  curwin->w_localdir = NULL;
+  XFREE_CLEAR(curwin->w_localdir);
 
   // Overwrite the tab-local CWD for :cd, :tcd.
   if (scope >= kCdScopeTab) {
-    xfree(curtab->tp_localdir);
-    curtab->tp_localdir = NULL;
+    XFREE_CLEAR(curtab->tp_localdir);
   }
 
   if (scope < kCdScopeGlobal) {
@@ -7235,8 +7272,7 @@ void post_chdir(CdScope scope)
   switch (scope) {
   case kCdScopeGlobal:
     // We are now in the global directory, no need to remember its name.
-    xfree(globaldir);
-    globaldir = NULL;
+    XFREE_CLEAR(globaldir);
     break;
   case kCdScopeTab:
     curtab->tp_localdir = (char_u *)xstrdup(cwd);
@@ -7249,7 +7285,10 @@ void post_chdir(CdScope scope)
   }
 
   shorten_fnames(true);
-  do_autocmd_dirchanged(cwd, scope);
+
+  if (trigger_dirchanged) {
+    do_autocmd_dirchanged(cwd, scope);
+  }
 }
 
 /// `:cd`, `:tcd`, `:lcd`, `:chdir`, `:tchdir` and `:lchdir`.
@@ -7308,10 +7347,10 @@ void ex_cd(exarg_T *eap)
       break;
     }
 
-    if (vim_chdir(new_dir, scope)) {
+    if (vim_chdir(new_dir)) {
       EMSG(_(e_failed));
     } else {
-      post_chdir(scope);
+      post_chdir(scope, true);
       // Echo the new current directory if the command was typed.
       if (KeyTyped || p_verbose >= 5) {
         ex_pwd(eap);
@@ -7375,6 +7414,12 @@ void do_sleep(long msec)
     int next = left > 1000l ? 1000 : (int)left;
     LOOP_PROCESS_EVENTS_UNTIL(&main_loop, main_loop.events, (int)next, got_int);
     os_breakcheck();
+  }
+
+  // If CTRL-C was typed to interrupt the sleep, drop the CTRL-C from the
+  // input buffer, otherwise a following call to input() fails.
+  if (got_int) {
+    (void)vpeekc();
   }
 }
 
@@ -7772,11 +7817,12 @@ static void ex_redir(exarg_T *eap)
     redir_off = FALSE;
 }
 
-/*
- * ":redraw": force redraw
- */
+/// ":redraw": force redraw
 static void ex_redraw(exarg_T *eap)
 {
+  if (State & CMDPREVIEW) {
+    return;  // Ignore :redraw during 'inccommand' preview. #9777
+  }
   int r = RedrawingDisabled;
   int p = p_lz;
 
@@ -7805,11 +7851,12 @@ static void ex_redraw(exarg_T *eap)
   ui_flush();
 }
 
-/*
- * ":redrawstatus": force redraw of status line(s)
- */
+/// ":redrawstatus": force redraw of status line(s)
 static void ex_redrawstatus(exarg_T *eap)
 {
+  if (State & CMDPREVIEW) {
+    return;  // Ignore :redrawstatus during 'inccommand' preview. #9777
+  }
   int r = RedrawingDisabled;
   int p = p_lz;
 
@@ -8367,7 +8414,7 @@ static void ex_pedit(exarg_T *eap)
 
   g_do_tagpreview = p_pvh;
   prepare_tagpreview(true);
-  keep_help_flag = curwin_save->w_buffer->b_help;
+  keep_help_flag = bt_help(curwin_save->w_buffer);
   do_exedit(eap, NULL);
   keep_help_flag = FALSE;
   if (curwin != curwin_save && win_valid(curwin_save)) {
@@ -8522,6 +8569,7 @@ eval_vars (
   size_t resultlen;
   buf_T       *buf;
   int valid = VALID_HEAD | VALID_PATH;  // Assume valid result.
+  bool tilde_file = false;
   int skip_mod = false;
   char strbuf[30];
 
@@ -8578,9 +8626,11 @@ eval_vars (
     case SPEC_PERC:             /* '%': current file */
       if (curbuf->b_fname == NULL) {
         result = (char_u *)"";
-        valid = 0;                  /* Must have ":p:h" to be valid */
-      } else
+        valid = 0;                  // Must have ":p:h" to be valid
+      } else {
         result = curbuf->b_fname;
+        tilde_file = STRCMP(result, "~") == 0;
+      }
       break;
 
     case SPEC_HASH:             /* '#' or "#99": alternate file */
@@ -8629,9 +8679,11 @@ eval_vars (
           *lnump = ECMD_LAST;
         if (buf->b_fname == NULL) {
           result = (char_u *)"";
-          valid = 0;                        /* Must have ":p:h" to be valid */
-        } else
+          valid = 0;                        // Must have ":p:h" to be valid
+        } else {
           result = buf->b_fname;
+          tilde_file = STRCMP(result, "~") == 0;
+        }
       }
       break;
 
@@ -8645,7 +8697,10 @@ eval_vars (
       break;
 
     case SPEC_AFILE:  // file name for autocommand
-      if (autocmd_fname != NULL && !path_is_absolute(autocmd_fname)) {
+      if (autocmd_fname != NULL
+          && !path_is_absolute(autocmd_fname)
+          // For CmdlineEnter and related events, <afile> is not a path! #9348
+          && !strequal("/", (char *)autocmd_fname)) {
         // Still need to turn the fname into a full path.  It was
         // postponed to avoid a delay when <afile> is not used.
         result = (char_u *)FullName_save((char *)autocmd_fname, false);
@@ -8713,7 +8768,8 @@ eval_vars (
         resultlen = (size_t)(s - result);
       }
     } else if (!skip_mod) {
-      valid |= modify_fname(src, usedlen, &result, &resultbuf, &resultlen);
+      valid |= modify_fname(src, tilde_file, usedlen, &result,
+                            &resultbuf, &resultlen);
       if (result == NULL) {
         *errormsg = (char_u *)"";
         return NULL;
@@ -9005,7 +9061,7 @@ makeopens(
     for (wp = tab_firstwin; wp != NULL; wp = wp->w_next) {
       if (ses_do_win(wp)
           && wp->w_buffer->b_ffname != NULL
-          && !wp->w_buffer->b_help
+          && !bt_help(wp->w_buffer)
           && !bt_nofile(wp->w_buffer)
           ) {
         if (fputs(need_tabnew ? "tabedit " : "edit ", fd) < 0
@@ -9112,6 +9168,7 @@ makeopens(
           || put_eol(fd) == FAIL) {
         return FAIL;
       }
+      did_lcd = true;
     }
 
     /* Don't continue in another tab page when doing only the current one
@@ -9175,33 +9232,38 @@ static int ses_winsizes(FILE *fd, int restore_size, win_T *tab_firstwin)
 
   if (restore_size && (ssop_flags & SSOP_WINSIZE)) {
     for (wp = tab_firstwin; wp != NULL; wp = wp->w_next) {
-      if (!ses_do_win(wp))
+      if (!ses_do_win(wp)) {
         continue;
-      ++n;
+      }
+      n++;
 
-      /* restore height when not full height */
+      // restore height when not full height
       if (wp->w_height + wp->w_status_height < topframe->fr_height
           && (fprintf(fd,
-                  "exe '%dresize ' . ((&lines * %" PRId64
-                  " + %" PRId64 ") / %" PRId64 ")",
-                  n, (int64_t)wp->w_height,
-                  (int64_t)(Rows / 2), (int64_t)Rows) < 0
-              || put_eol(fd) == FAIL))
+                      "exe '%dresize ' . ((&lines * %" PRId64
+                      " + %" PRId64 ") / %" PRId64 ")",
+                      n, (int64_t)wp->w_height,
+                      (int64_t)Rows / 2, (int64_t)Rows) < 0
+              || put_eol(fd) == FAIL)) {
         return FAIL;
+      }
 
-      /* restore width when not full width */
+      // restore width when not full width
       if (wp->w_width < Columns
-          && (fprintf(fd, "exe 'vert %dresize ' . ((&columns * %" PRId64
-                          " + %" PRId64 ") / %" PRId64 ")",
-                      n, (int64_t)wp->w_width, (int64_t)(Columns / 2),
+          && (fprintf(fd,
+                      "exe 'vert %dresize ' . ((&columns * %" PRId64
+                      " + %" PRId64 ") / %" PRId64 ")",
+                      n, (int64_t)wp->w_width, (int64_t)Columns / 2,
                       (int64_t)Columns) < 0
-              || put_eol(fd) == FAIL))
+              || put_eol(fd) == FAIL)) {
         return FAIL;
+      }
     }
   } else {
-    /* Just equalise window sizes */
-    if (put_line(fd, "wincmd =") == FAIL)
+    // Just equalise window sizes
+    if (put_line(fd, "wincmd =") == FAIL) {
       return FAIL;
+    }
   }
   return OK;
 }
@@ -9290,7 +9352,7 @@ static int ses_do_win(win_T *wp)
       || (!wp->w_buffer->terminal && bt_nofile(wp->w_buffer))) {
     return ssop_flags & SSOP_BLANK;
   }
-  if (wp->w_buffer->b_help) {
+  if (bt_help(wp->w_buffer)) {
     return ssop_flags & SSOP_HELP;
   }
   return true;
@@ -9349,10 +9411,11 @@ put_view(
    * arguments may have been deleted, check if the index is valid. */
   if (wp->w_arg_idx != current_arg_idx && wp->w_arg_idx < WARGCOUNT(wp)
       && flagp == &ssop_flags) {
-    if (fprintf(fd, "%" PRId64 "argu", (int64_t)(wp->w_arg_idx + 1)) < 0
-        || put_eol(fd) == FAIL)
+    if (fprintf(fd, "%" PRId64 "argu", (int64_t)wp->w_arg_idx + 1) < 0
+        || put_eol(fd) == FAIL) {
       return FAIL;
-    did_next = TRUE;
+    }
+    did_next = true;
   }
 
   /* Edit the file.  Skip this when ":next" already did it. */
@@ -9369,9 +9432,9 @@ put_view(
       // Note, if a buffer for that file already exists, use :badd to
       // edit that buffer, to not lose folding information (:edit resets
       // folds in other buffers)
-      if (fputs("if bufexists('", fd) < 0
+      if (fputs("if bufexists(\"", fd) < 0
           || ses_fname(fd, wp->w_buffer, flagp, false) == FAIL
-          || fputs("') | buffer ", fd) < 0
+          || fputs("\") | buffer ", fd) < 0
           || ses_fname(fd, wp->w_buffer, flagp, false) == FAIL
           || fputs(" | else | edit ", fd) < 0
           || ses_fname(fd, wp->w_buffer, flagp, false) == FAIL
@@ -9429,7 +9492,7 @@ put_view(
    */
   if ((*flagp & SSOP_FOLDS)
       && wp->w_buffer->b_ffname != NULL
-      && (*wp->w_buffer->b_p_bt == NUL || wp->w_buffer->b_help)
+      && (*wp->w_buffer->b_p_bt == NUL || bt_help(wp->w_buffer))
       ) {
     if (put_folds(fd, wp) == FAIL)
       return FAIL;
@@ -9447,8 +9510,8 @@ put_view(
                 " * winheight(0) + %" PRId64 ") / %" PRId64 ")",
                 (int64_t)wp->w_cursor.lnum,
                 (int64_t)(wp->w_cursor.lnum - wp->w_topline),
-                (int64_t)(wp->w_height / 2),
-                (int64_t)wp->w_height) < 0
+                (int64_t)(wp->w_height_inner / 2),
+                (int64_t)wp->w_height_inner) < 0
         || put_eol(fd) == FAIL
         || put_line(fd, "if s:l < 1 | let s:l = 1 | endif") == FAIL
         || put_line(fd, "exe s:l") == FAIL
@@ -9462,21 +9525,23 @@ put_view(
         return FAIL;
     } else {
       if (!wp->w_p_wrap && wp->w_leftcol > 0 && wp->w_width > 0) {
-        if (fprintf(fd, "let s:c = %" PRId64 " - ((%" PRId64
-                        " * winwidth(0) + %" PRId64 ") / %" PRId64 ")",
-                    (int64_t)(wp->w_virtcol + 1),
+        if (fprintf(fd,
+                    "let s:c = %" PRId64 " - ((%" PRId64
+                    " * winwidth(0) + %" PRId64 ") / %" PRId64 ")",
+                    (int64_t)wp->w_virtcol + 1,
                     (int64_t)(wp->w_virtcol - wp->w_leftcol),
                     (int64_t)(wp->w_width / 2),
                     (int64_t)wp->w_width) < 0
             || put_eol(fd) == FAIL
             || put_line(fd, "if s:c > 0") == FAIL
             || fprintf(fd, "  exe 'normal! ' . s:c . '|zs' . %" PRId64 " . '|'",
-                (int64_t)(wp->w_virtcol + 1)) < 0
+                       (int64_t)wp->w_virtcol + 1) < 0
             || put_eol(fd) == FAIL
             || put_line(fd, "else") == FAIL
             || put_view_curpos(fd, wp, "  ") == FAIL
-            || put_line(fd, "endif") == FAIL)
+            || put_line(fd, "endif") == FAIL) {
           return FAIL;
+        }
       } else if (put_view_curpos(fd, wp, "") == FAIL) {
         return FAIL;
       }
@@ -10087,6 +10152,7 @@ Dictionary commands_array(buf_T *buf)
 {
   Dictionary rv = ARRAY_DICT_INIT;
   Object obj = NIL;
+  (void)obj;  // Avoid "dead assignment" warning.
   char str[10];
   garray_T *gap = (buf == NULL) ? &ucmds : &buf->b_ucmds;
 

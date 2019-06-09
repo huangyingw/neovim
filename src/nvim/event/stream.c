@@ -53,9 +53,19 @@ void stream_init(Loop *loop, Stream *stream, int fd, uv_stream_t *uvstream)
       stream->uv.idle.data = stream;
     } else {
       assert(type == UV_NAMED_PIPE || type == UV_TTY);
+#ifdef WIN32
+      if (type == UV_TTY) {
+        uv_tty_init(&loop->uv, &stream->uv.tty, fd, 0);
+        uv_tty_set_mode(&stream->uv.tty, UV_TTY_MODE_RAW);
+        stream->uvstream = STRUCT_CAST(uv_stream_t, &stream->uv.tty);
+      } else {
+#endif
       uv_pipe_init(&loop->uv, &stream->uv.pipe, 0);
       uv_pipe_open(&stream->uv.pipe, fd);
       stream->uvstream = STRUCT_CAST(uv_stream_t, &stream->uv.pipe);
+#ifdef WIN32
+      }
+#endif
     }
   }
 
@@ -82,7 +92,7 @@ void stream_close(Stream *stream, stream_close_cb on_stream_close, void *data)
   FUNC_ATTR_NONNULL_ARG(1)
 {
   assert(!stream->closed);
-  DLOG("closing Stream: %p", stream);
+  DLOG("closing Stream: %p", (void *)stream);
   stream->closed = true;
   stream->close_cb = on_stream_close;
   stream->close_cb_data = data;

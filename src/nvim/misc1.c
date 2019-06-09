@@ -52,6 +52,7 @@
 #include "nvim/window.h"
 #include "nvim/os/os.h"
 #include "nvim/os/shell.h"
+#include "nvim/os/signal.h"
 #include "nvim/os/input.h"
 #include "nvim/os/time.h"
 #include "nvim/event/stream.h"
@@ -98,7 +99,7 @@ open_line (
   colnr_T newcol = 0;             // new cursor column
   int newindent = 0;              // auto-indent of the new line
   bool trunc_line = false;        // truncate current line afterwards
-  bool retval = false;            // return value, default is false
+  bool retval = false;            // return value
   int extra_len = 0;              // length of p_extra string
   int lead_len;                   // length of comment leader
   char_u *lead_flags;             // position in 'comments' for comment leader
@@ -202,7 +203,7 @@ open_line (
       char_u  *ptr;
       char_u last_char;
 
-      pos_T old_cursor = curwin->w_cursor;
+      old_cursor = curwin->w_cursor;
       ptr = saved_line;
       if (flags & OPENLINE_DO_COM)
         lead_len = get_leader_len(ptr, NULL, FALSE, TRUE);
@@ -709,9 +710,6 @@ open_line (
         less_cols_off++;
       }
     }
-    if (*p_extra != NUL) {
-      did_ai = false;               // append some text, don't truncate now
-    }
 
     /* columns for marks adjusted for removed columns */
     less_cols = (int)(p_extra - saved_line);
@@ -747,9 +745,9 @@ open_line (
   if (dir == BACKWARD)
     --curwin->w_cursor.lnum;
   if (!(State & VREPLACE_FLAG) || old_cursor.lnum >= orig_line_count) {
-    if (ml_append(curwin->w_cursor.lnum, p_extra, (colnr_T)0, FALSE)
-        == FAIL)
+    if (ml_append(curwin->w_cursor.lnum, p_extra, (colnr_T)0, false) == FAIL) {
       goto theend;
+    }
     // Postpone calling changed_lines(), because it would mess up folding
     // with markers.
     // Skip mark_adjust when adding a line after the last one, there can't
@@ -847,10 +845,11 @@ open_line (
         /* Move marks after the line break to the new line. */
         if (flags & OPENLINE_MARKFIX)
           mark_col_adjust(curwin->w_cursor.lnum,
-              curwin->w_cursor.col + less_cols_off,
-              1L, (long)-less_cols);
-      } else
+                          curwin->w_cursor.col + less_cols_off,
+                          1L, (long)-less_cols, 0);
+      } else {
         changed_bytes(curwin->w_cursor.lnum, curwin->w_cursor.col);
+      }
     }
 
     /*
@@ -922,7 +921,7 @@ open_line (
     next_line = NULL;
   }
 
-  retval = TRUE;                /* success! */
+  retval = true;                // success!
 theend:
   curbuf->b_p_pi = saved_pi;
   xfree(saved_line);
@@ -1121,8 +1120,9 @@ int get_last_leader_offset(char_u *line, char_u **flags)
       if (ascii_iswhite(string[0])) {
         if (i == 0 || !ascii_iswhite(line[i - 1]))
           continue;
-        while (ascii_iswhite(string[0]))
-          ++string;
+        while (ascii_iswhite(*string)) {
+          string++;
+        }
       }
       for (j = 0; string[j] != NUL && string[j] == line[i + j]; ++j)
         /* do nothing */;
@@ -1136,6 +1136,19 @@ int get_last_leader_offset(char_u *line, char_u **flags)
       if (vim_strchr(part_buf, COM_BLANK) != NULL
           && !ascii_iswhite(line[i + j]) && line[i + j] != NUL) {
         continue;
+      }
+
+      if (vim_strchr(part_buf, COM_MIDDLE) != NULL) {
+        // For a middlepart comment, only consider it to match if
+        // everything before the current position in the line is
+        // whitespace.  Otherwise we would think we are inside a
+        // comment if the middle part appears somewhere in the middle
+        // of the line.  E.g. for C the "*" appears often.
+        for (j = 0; ascii_iswhite(line[j]) && j <= i; j++) {
+        }
+        if (j < i) {
+          continue;
+        }
       }
 
       /*
@@ -1236,7 +1249,7 @@ int plines_win_nofill(
     return 1;
   }
 
-  if (wp->w_width == 0) {
+  if (wp->w_width_inner == 0) {
     return 1;
   }
 
@@ -1246,8 +1259,8 @@ int plines_win_nofill(
   }
 
   const int lines = plines_win_nofold(wp, lnum);
-  if (winheight && lines > wp->w_height) {
-    return wp->w_height;
+  if (winheight && lines > wp->w_height_inner) {
+    return wp->w_height_inner;
   }
   return lines;
 }
@@ -1267,17 +1280,16 @@ int plines_win_nofold(win_T *wp, linenr_T lnum)
     return 1;
   col = win_linetabsize(wp, s, (colnr_T)MAXCOL);
 
-  /*
-   * If list mode is on, then the '$' at the end of the line may take up one
-   * extra column.
-   */
-  if (wp->w_p_list && lcs_eol != NUL)
+  // If list mode is on, then the '$' at the end of the line may take up one
+  // extra column.
+  if (wp->w_p_list && wp->w_p_lcs_chars.eol != NUL) {
     col += 1;
+  }
 
   /*
    * Add column offset for 'number', 'relativenumber' and 'foldcolumn'.
    */
-  width = wp->w_width - win_col_off(wp);
+  width = wp->w_width_inner - win_col_off(wp);
   if (width <= 0 || col > 32000) {
     return 32000;  // bigger than the number of screen columns
   }
@@ -1303,8 +1315,9 @@ int plines_win_col(win_T *wp, linenr_T lnum, long column)
   if (!wp->w_p_wrap)
     return lines + 1;
 
-  if (wp->w_width == 0)
+  if (wp->w_width_inner == 0) {
     return lines + 1;
+  }
 
   char_u *line = ml_get_buf(wp->w_buffer, lnum, false);
   char_u *s = line;
@@ -1320,12 +1333,13 @@ int plines_win_col(win_T *wp, linenr_T lnum, long column)
   // screen position of the TAB.  This only fixes an error when the TAB wraps
   // from one screen line to the next (when 'columns' is not a multiple of
   // 'ts') -- webb.
-  if (*s == TAB && (State & NORMAL) && (!wp->w_p_list || lcs_tab1)) {
+  if (*s == TAB && (State & NORMAL)
+      && (!wp->w_p_list || wp->w_p_lcs_chars.tab1)) {
     col += win_lbr_chartabsize(wp, line, s, col, NULL) - 1;
   }
 
   // Add column offset for 'number', 'relativenumber', 'foldcolumn', etc.
-  int width = wp->w_width - win_col_off(wp);
+  int width = wp->w_width_inner - win_col_off(wp);
   if (width <= 0) {
     return 9999;
   }
@@ -1733,8 +1747,8 @@ del_lines (
     if (curbuf->b_ml.ml_flags & ML_EMPTY)           /* nothing to delete */
       break;
 
-    ml_delete(first, TRUE);
-    ++n;
+    ml_delete(first, true);
+    n++;
 
     /* If we delete the last line in the file, stop */
     if (first > curbuf->b_ml.ml_line_count)
@@ -1803,6 +1817,9 @@ void changed(void)
     changed_int();
   }
   buf_inc_changedtick(curbuf);
+
+  // If a pattern is highlighted, the position may now be invalid.
+  highlight_match = false;
 }
 
 /*
@@ -1830,9 +1847,7 @@ void changed_bytes(linenr_T lnum, colnr_T col)
   changedOneline(curbuf, lnum);
   changed_common(lnum, col, lnum + 1, 0L);
   // notify any channels that are watching
-  if (kv_size(curbuf->update_channels)) {
-    buf_updates_send_changes(curbuf, lnum, 1, 1, true);
-  }
+  buf_updates_send_changes(curbuf, lnum, 1, 1, true);
 
   /* Diff highlighting in other diff windows may need to be updated too. */
   if (curwin->w_p_diff) {
@@ -1936,10 +1951,10 @@ changed_lines(
 {
   changed_lines_buf(curbuf, lnum, lnume, xtra);
 
-  if (xtra == 0 && curwin->w_p_diff) {
-    /* When the number of lines doesn't change then mark_adjust() isn't
-     * called and other diff buffers still need to be marked for
-     * displaying. */
+  if (xtra == 0 && curwin->w_p_diff && !diff_internal()) {
+    // When the number of lines doesn't change then mark_adjust() isn't
+    // called and other diff buffers still need to be marked for
+    // displaying.
     linenr_T wlnum;
 
     FOR_ALL_WINDOWS_IN_TAB(wp, curtab) {
@@ -1956,7 +1971,7 @@ changed_lines(
 
   changed_common(lnum, col, lnume, xtra);
 
-  if (do_buf_event && kv_size(curbuf->update_channels)) {
+  if (do_buf_event) {
     int64_t num_added = (int64_t)(lnume + xtra - lnum);
     int64_t num_removed = lnume - lnum;
     buf_updates_send_changes(curbuf, lnum, num_added, num_removed, true);
@@ -2007,6 +2022,10 @@ static void changed_common(linenr_T lnum, colnr_T col, linenr_T lnume, long xtra
 
   /* mark the buffer as modified */
   changed();
+
+  if (curwin->w_p_diff && diff_internal()) {
+    curtab->tp_diff_update = true;
+  }
 
   /* set the '. mark */
   if (!cmdmod.keepjumps) {
@@ -2154,7 +2173,7 @@ static void changed_common(linenr_T lnum, colnr_T col, linenr_T lnume, long xtra
   /* when the cursor line is changed always trigger CursorMoved */
   if (lnum <= curwin->w_cursor.lnum
       && lnume + (xtra < 0 ? -xtra : xtra) > curwin->w_cursor.lnum)
-    last_cursormoved.lnum = 0;
+    curwin->w_last_cursormoved.lnum = 0;
 }
 
 /*
@@ -2227,6 +2246,7 @@ change_warning (
     if (msg_row == Rows - 1)
       msg_col = col;
     msg_source(HL_ATTR(HLF_W));
+    msg_ext_set_kind("wmsg");
     MSG_PUTS_ATTR(_(w_readonly), HL_ATTR(HLF_W) | MSG_HIST);
     set_vim_var_string(VV_WARNINGMSG, _(w_readonly), -1);
     msg_clr_eos();
@@ -2483,18 +2503,24 @@ int prompt_for_number(int *mouse_used)
   cmdline_row = 0;
   save_State = State;
   State = ASKMORE;  // prevents a screen update when using a timer
+  // May show different mouse shape.
+  setmouse();
 
   i = get_number(TRUE, mouse_used);
   if (KeyTyped) {
-    /* don't call wait_return() now */
-    /* msg_putchar('\n'); */
-    cmdline_row = msg_row - 1;
-    need_wait_return = FALSE;
-    msg_didany = FALSE;
-    msg_didout = FALSE;
-  } else
+    // don't call wait_return() now
+    if (msg_row > 0) {
+      cmdline_row = msg_row - 1;
+    }
+    need_wait_return = false;
+    msg_didany = false;
+    msg_didout = false;
+  } else {
     cmdline_row = save_cmdline_row;
+  }
   State = save_State;
+  // May need to restore mouse shape.
+  setmouse();
 
   return i;
 }
@@ -2557,17 +2583,32 @@ void beep_flush(void)
 // val is one of the BO_ values, e.g., BO_OPER
 void vim_beep(unsigned val)
 {
+  called_vim_beep = true;
+
   if (emsg_silent == 0) {
     if (!((bo_flags & val) || (bo_flags & BO_ALL))) {
-      if (p_vb) {
-        ui_call_visual_bell();
-      } else {
-        ui_call_bell();
+      static int beeps = 0;
+      static uint64_t start_time = 0;
+
+      // Only beep up to three times per half a second,
+      // otherwise a sequence of beeps would freeze Vim.
+      if (start_time == 0 || os_hrtime() - start_time > 500000000u) {
+        beeps = 0;
+        start_time = os_hrtime();
+      }
+      beeps++;
+      if (beeps <= 3) {
+        if (p_vb) {
+          ui_call_visual_bell();
+        } else {
+          ui_call_bell();
+        }
       }
     }
 
-    /* When 'verbose' is set and we are sourcing a script or executing a
-     * function give the user a hint where the beep comes from. */
+    // When 'debug' contains "beep" produce a message.  If we are sourcing
+    // a script or executing a function give the user a hint where the beep
+    // comes from.
     if (vim_strchr(p_debug, 'e') != NULL) {
       msg_source(HL_ATTR(HLF_W));
       msg_attr(_("Beep!"), HL_ATTR(HLF_W));
@@ -2653,6 +2694,8 @@ void preserve_exit(void)
   }
 
   really_exiting = true;
+  // Ignore SIGHUP while we are already exiting. #9274
+  signal_reject_deadly();
   mch_errmsg(IObuff);
   mch_errmsg("\n");
   ui_flush();
@@ -2801,8 +2844,7 @@ char_u *get_cmd_output(char_u *cmd, char_u *infile, ShellOpts flags,
   os_remove((char *)tempname);
   if (i != len) {
     EMSG2(_(e_notread), tempname);
-    xfree(buffer);
-    buffer = NULL;
+    XFREE_CLEAR(buffer);
   } else if (ret_len == NULL) {
     /* Change NUL into SOH, otherwise the string is truncated. */
     for (i = 0; i < len; ++i)

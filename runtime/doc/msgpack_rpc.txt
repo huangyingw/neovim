@@ -51,7 +51,7 @@ There are three ways to obtain API metadata:
   3. Use the |api_info()| vimscript function.
 
 To get a human-readable list of API functions: >
-    :new|put =map(api_info().functions, 'v:val.name')
+    :new|put =map(filter(api_info().functions, '!has_key(v:val,''deprecated_since'')'), 'v:val.name')
 <
 To get a formatted dump of the API using python (requires the `pyyaml` and
 `msgpack-python` packages): >
@@ -114,17 +114,18 @@ You can also embed an Nvim instance via |jobstart()|, and communicate using
 ==============================================================================
 4. Implementing API clients			*rpc-api-client* *api-client*
 
-"API clients" wrap the Nvim API to provide idiomatic "SDKs" for their
-respective platforms (see |dev-jargon|). You can build a new API client for
-your favorite platform or programming language.
+API clients wrap the Nvim API to provide idiomatic "SDKs" for their respective
+platforms (see |jargon|). You can build a new API client for your favorite
+platform or programming language.
 
-Existing API clients are listed here:
+API clients are listed here:
     https://github.com/neovim/neovim/wiki/Related-projects#api-clients
 
+                                                                      *pynvim*
 The Python client is the reference implementation for API clients. It is
 always up-to-date with the Nvim API, so its source code and test suite are
 authoritative references.
-    https://github.com/neovim/python-client
+    https://github.com/neovim/pynvim
 
 API client implementation guidelines ~
 

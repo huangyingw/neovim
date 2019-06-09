@@ -556,6 +556,18 @@ func Test_mode()
   call assert_equal('n', mode(0))
   call assert_equal('n', mode(1))
 
+  " i_CTRL-O
+  exe "normal i\<C-O>:call Save_mode()\<Cr>\<Esc>"
+  call assert_equal("n-niI", g:current_modes)
+
+  " R_CTRL-O
+  exe "normal R\<C-O>:call Save_mode()\<Cr>\<Esc>"
+  call assert_equal("n-niR", g:current_modes)
+
+  " gR_CTRL-O
+  exe "normal gR\<C-O>:call Save_mode()\<Cr>\<Esc>"
+  call assert_equal("n-niV", g:current_modes)
+
   " How to test operator-pending mode?
 
   call feedkeys("v", 'xt')
@@ -869,12 +881,23 @@ func Test_Executable()
     call assert_equal(1, executable('notepad'))
     call assert_equal(1, executable('notepad.exe'))
     call assert_equal(0, executable('notepad.exe.exe'))
-    call assert_equal(1, executable('shell32.dll'))
-    call assert_equal(1, executable('win.ini'))
+    call assert_equal(0, executable('shell32.dll'))
+    call assert_equal(0, executable('win.ini'))
   elseif has('unix')
     call assert_equal(1, executable('cat'))
     call assert_equal(0, executable('nodogshere'))
   endif
+endfunc
+
+func Test_executable_longname()
+  if !has('win32')
+    return
+  endif
+
+  let fname = 'X' . repeat('あ', 200) . '.bat'
+  call writefile([], fname)
+  call assert_equal(1, executable(fname))
+  call delete(fname)
 endfunc
 
 func Test_hostname()
@@ -944,8 +967,8 @@ func Test_balloon_show()
 endfunc
 
 func Test_shellescape()
-  let save_shell = &shell
-  set shell=bash
+  let [save_shell, save_shellslash] = [&shell, &shellslash]
+  set shell=bash shellslash
   call assert_equal("'text'", shellescape('text'))
   call assert_equal("'te\"xt'", shellescape('te"xt'))
   call assert_equal("'te'\\''xt'", shellescape("te'xt"))
@@ -959,13 +982,13 @@ func Test_shellescape()
 
   call assert_equal("'te\nxt'", shellescape("te\nxt"))
   call assert_equal("'te\\\nxt'", shellescape("te\nxt", 1))
-  set shell=tcsh
+  set shell=tcsh shellslash
   call assert_equal("'te\\!xt'", shellescape("te!xt"))
   call assert_equal("'te\\\\!xt'", shellescape("te!xt", 1))
   call assert_equal("'te\\\nxt'", shellescape("te\nxt"))
   call assert_equal("'te\\\\\nxt'", shellescape("te\nxt", 1))
 
-  let &shell = save_shell
+  let [&shell, &shellslash] = [save_shell, save_shellslash]
 endfunc
 
 func Test_redo_in_nested_functions()
@@ -1017,4 +1040,103 @@ func Test_trim()
 
   let chars = join(map(range(1, 0x20) + [0xa0], {n -> nr2char(n)}), '')
   call assert_equal("x", trim(chars . "x" . chars))
+endfunc
+
+func EditAnotherFile()
+  let word = expand('<cword>')
+  edit Xfuncrange2
+endfunc
+
+func Test_func_range_with_edit()
+  " Define a function that edits another buffer, then call it with a range that
+  " is invalid in that buffer.
+  call writefile(['just one line'], 'Xfuncrange2')
+  new
+  call setline(1, range(10))
+  write Xfuncrange1
+  call assert_fails('5,8call EditAnotherFile()', 'E16:')
+
+  call delete('Xfuncrange1')
+  call delete('Xfuncrange2')
+  bwipe!
+endfunc
+
+sandbox function Fsandbox()
+  normal ix
+endfunc
+
+func Test_func_sandbox()
+  sandbox let F = {-> 'hello'}
+  call assert_equal('hello', F())
+
+  sandbox let F = {-> execute("normal ix\<Esc>")}
+  call assert_fails('call F()', 'E48:')
+  unlet F
+
+  call assert_fails('call Fsandbox()', 'E48:')
+  delfunc Fsandbox
+endfunc
+
+" Test for reg_recording() and reg_executing()
+func Test_reg_executing_and_recording()
+  let s:reg_stat = ''
+  func s:save_reg_stat()
+    let s:reg_stat = reg_recording() . ':' . reg_executing()
+    return ''
+  endfunc
+
+  new
+  call s:save_reg_stat()
+  call assert_equal(':', s:reg_stat)
+  call feedkeys("qa\"=s:save_reg_stat()\<CR>pq", 'xt')
+  call assert_equal('a:', s:reg_stat)
+  call feedkeys("@a", 'xt')
+  call assert_equal(':a', s:reg_stat)
+  call feedkeys("qb@aq", 'xt')
+  call assert_equal('b:a', s:reg_stat)
+  call feedkeys("q\"\"=s:save_reg_stat()\<CR>pq", 'xt')
+  call assert_equal('":', s:reg_stat)
+
+  " :normal command saves and restores reg_executing
+  let s:reg_stat = ''
+
+  " getchar() command saves and restores reg_executing
+  map W :call TestFunc()<CR>
+  let @q = "W"
+  let g:typed = ''
+  let g:regs = []
+  func TestFunc() abort
+    let g:regs += [reg_executing()]
+    let g:typed = getchar(0)
+    let g:regs += [reg_executing()]
+  endfunc
+  call feedkeys("@qy", 'xt')
+  call assert_equal(char2nr("y"), g:typed)
+  call assert_equal(['q', 'q'], g:regs)
+  delfunc TestFunc
+  unmap W
+  unlet g:typed
+  unlet g:regs
+
+  " input() command saves and restores reg_executing
+  map W :call TestFunc()<CR>
+  let @q = "W"
+  let g:typed = ''
+  let g:regs = []
+  func TestFunc() abort
+    let g:regs += [reg_executing()]
+    let g:typed = input('?')
+    let g:regs += [reg_executing()]
+  endfunc
+  call feedkeys("@qy\<CR>", 'xt')
+  call assert_equal("y", g:typed)
+  call assert_equal(['q', 'q'], g:regs)
+  delfunc TestFunc
+  unmap W
+  unlet g:typed
+  unlet g:regs
+
+  bwipe!
+  delfunc s:save_reg_stat
+  unlet s:reg_stat
 endfunc

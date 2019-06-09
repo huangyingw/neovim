@@ -2,6 +2,7 @@ local helpers = require('test.functional.helpers')(after_each)
 local eval, command, feed = helpers.eval, helpers.command, helpers.feed
 local eq, clear, insert = helpers.eq, helpers.clear, helpers.insert
 local expect, write_file = helpers.expect, helpers.write_file
+local expect_err = helpers.expect_err
 local feed_command = helpers.feed_command
 local source = helpers.source
 local missing_provider = helpers.missing_provider
@@ -9,7 +10,12 @@ local missing_provider = helpers.missing_provider
 do
   clear()
   if missing_provider('python3') then
-    pending('Python 3 (or the neovim module) is broken/missing', function() end)
+    it(':python3 reports E319 if provider is missing', function()
+      local expected = [[Vim%(py3.*%):E319: No "python3" provider found.*]]
+      expect_err(expected, command, 'py3 print("foo")')
+      expect_err(expected, command, 'py3file foo')
+    end)
+    pending('Python 3 (or the pynvim module) is broken/missing', function() end)
     return
   end
 end
@@ -34,8 +40,8 @@ describe('python3 provider', function()
     -- mostly bogus.
     local very_long_symbol = string.rep('a', 1200)
     feed_command(':silent! py3 print('..very_long_symbol..' b)')
-    -- Truncated error message would not contain this (last) line.
-    eq('SyntaxError: invalid syntax', eval('v:errmsg'))
+    -- Error message will contain this (last) line.
+    eq('Error invoking \'python_execute\' on channel 3 (python3-script-host):\n  File "<string>", line 1\n    print('..very_long_symbol..' b)\n          '..string.rep(' ',1200)..' ^\nSyntaxError: invalid syntax', eval('v:errmsg'))
   end)
 
   it('python3_execute with nested commands', function()

@@ -1656,18 +1656,34 @@ int tv_dict_add_special(dict_T *const d, const char *const key,
 
 /// Add a string entry to dictionary
 ///
-/// @param[out]  d  Dictionary to add entry to.
-/// @param[in]  key  Key to add.
-/// @param[in]  key_len  Key length.
-/// @param[in]  val  String to add.
-///
-/// @return OK in case of success, FAIL when key already exists.
+/// @see tv_dict_add_allocated_str
 int tv_dict_add_str(dict_T *const d,
                     const char *const key, const size_t key_len,
                     const char *const val)
   FUNC_ATTR_NONNULL_ALL
 {
   return tv_dict_add_allocated_str(d, key, key_len, xstrdup(val));
+}
+
+/// Add a string entry to dictionary
+///
+/// @param[out]  d  Dictionary to add entry to.
+/// @param[in]  key  Key to add.
+/// @param[in]  key_len  Key length.
+/// @param[in]  val  String to add. NULL adds empty string.
+/// @param[in]  len  Use this many bytes from `val`, or -1 for whole string.
+///
+/// @return OK in case of success, FAIL when key already exists.
+int tv_dict_add_str_len(dict_T *const d,
+                        const char *const key, const size_t key_len,
+                        char *const val, int len)
+  FUNC_ATTR_NONNULL_ARG(1, 2)
+{
+  char *s = val ? val : "";
+  if (val != NULL) {
+    s = (len < 0) ? xstrdup(val) : xstrndup(val, (size_t)len);
+  }
+  return tv_dict_add_allocated_str(d, key, key_len, s);
 }
 
 /// Add a string entry to dictionary
@@ -2850,7 +2866,7 @@ const char *tv_get_string_buf_chk(const typval_T *const tv, char *const buf)
 /// Get the string value of a "stringish" VimL object.
 ///
 /// @warning For number and special values it uses a single, static buffer. It
-///          may be used only once, next call to get_tv_string may reuse it. Use
+///          may be used only once, next call to tv_get_string may reuse it. Use
 ///          tv_get_string_buf() if you need to use tv_get_string() output after
 ///          calling it again.
 ///
@@ -2869,7 +2885,7 @@ const char *tv_get_string_chk(const typval_T *const tv)
 /// Get the string value of a "stringish" VimL object.
 ///
 /// @warning For number and special values it uses a single, static buffer. It
-///          may be used only once, next call to get_tv_string may reuse it. Use
+///          may be used only once, next call to tv_get_string may reuse it. Use
 ///          tv_get_string_buf() if you need to use tv_get_string() output after
 ///          calling it again.
 ///

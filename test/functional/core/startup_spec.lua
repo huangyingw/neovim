@@ -7,12 +7,15 @@ local eq = helpers.eq
 local eval = helpers.eval
 local feed = helpers.feed
 local funcs = helpers.funcs
+local mkdir = helpers.mkdir
 local nvim_prog = helpers.nvim_prog
 local nvim_set = helpers.nvim_set
 local read_file = helpers.read_file
 local retry = helpers.retry
+local rmdir = helpers.rmdir
 local sleep = helpers.sleep
 local iswin = helpers.iswin
+local write_file = helpers.write_file
 
 describe('startup', function()
   before_each(function()
@@ -43,7 +46,7 @@ describe('startup', function()
     ]])
   end)
   it('in a TTY: has("ttyin")==1 has("ttyout")==1', function()
-    local screen = Screen.new(25, 3)
+    local screen = Screen.new(25, 4)
     screen:attach()
     if iswin() then
       command([[set shellcmdflag=/s\ /c shellxquote=\"]])
@@ -55,6 +58,7 @@ describe('startup', function()
             ..[[, shellescape(v:progpath))]])
     screen:expect([[
       ^                         |
+      ~                        |
       1 1                      |
                                |
     ]])
@@ -93,7 +97,7 @@ describe('startup', function()
     end)
   end)
   it('input from pipe (implicit) #7679', function()
-    local screen = Screen.new(25, 3)
+    local screen = Screen.new(25, 4)
     screen:attach()
     if iswin() then
       command([[set shellcmdflag=/s\ /c shellxquote=\"]])
@@ -106,6 +110,7 @@ describe('startup', function()
             ..[[, shellescape(v:progpath))]])
     screen:expect([[
       ^foo                      |
+      ~                        |
       0 1                      |
                                |
     ]])
@@ -198,9 +203,75 @@ describe('startup', function()
                     { 'set encoding', '' }))
   end)
 
+  it('-es/-Es disables swapfile, user config #8540', function()
+    for _,arg in ipairs({'-es', '-Es'}) do
+      local out = funcs.system({nvim_prog, arg,
+                                '+set swapfile? updatecount? shada?',
+                                "+put =execute('scriptnames')", '+%print'})
+      local line1 = string.match(out, '^.-\n')
+      -- updatecount=0 means swapfile was disabled.
+      eq("  swapfile  updatecount=0  shada=!,'100,<50,s10,h\n", line1)
+      -- Standard plugins were loaded, but not user config.
+      eq('health.vim', string.match(out, 'health.vim'))
+      eq(nil, string.match(out, 'init.vim'))
+    end
+  end)
+
   it('does not crash if --embed is given twice', function()
     clear{args={'--embed'}}
     eq(2, eval('1+1'))
   end)
 end)
 
+describe('sysinit', function()
+  local xdgdir = 'Xxdg'
+  local vimdir = 'Xvim'
+  local xhome = 'Xhome'
+  local pathsep = helpers.get_pathsep()
+
+  before_each(function()
+    rmdir(xdgdir)
+    rmdir(vimdir)
+    rmdir(xhome)
+
+    mkdir(xdgdir)
+    mkdir(xdgdir .. pathsep .. 'nvim')
+    write_file(table.concat({xdgdir, 'nvim', 'sysinit.vim'}, pathsep), [[
+      let g:loaded = get(g:, "loaded", 0) + 1
+      let g:xdg = 1
+    ]])
+
+    mkdir(vimdir)
+    write_file(table.concat({vimdir, 'sysinit.vim'}, pathsep), [[
+      let g:loaded = get(g:, "loaded", 0) + 1
+      let g:vim = 1
+    ]])
+
+    mkdir(xhome)
+  end)
+  after_each(function()
+    rmdir(xdgdir)
+    rmdir(vimdir)
+    rmdir(xhome)
+  end)
+
+  it('prefers XDG_CONFIG_DIRS over VIM', function()
+    clear{args={'--cmd', 'set nomore undodir=. directory=. belloff='},
+          args_rm={'-u', '--cmd'},
+          env={ HOME=xhome,
+                XDG_CONFIG_DIRS=xdgdir,
+                VIM=vimdir }}
+    eq('loaded 1 xdg 1 vim 0',
+       eval('printf("loaded %d xdg %d vim %d", g:loaded, get(g:, "xdg", 0), get(g:, "vim", 0))'))
+  end)
+
+  it('uses VIM if XDG_CONFIG_DIRS unset', function()
+    clear{args={'--cmd', 'set nomore undodir=. directory=. belloff='},
+          args_rm={'-u', '--cmd'},
+          env={ HOME=xhome,
+                XDG_CONFIG_DIRS='',
+                VIM=vimdir }}
+    eq('loaded 1 xdg 0 vim 1',
+       eval('printf("loaded %d xdg %d vim %d", g:loaded, get(g:, "xdg", 0), get(g:, "vim", 0))'))
+  end)
+end)

@@ -156,6 +156,82 @@ local function screen_tests(linegrid)
     end)
   end)
 
+  describe('statusline', function()
+    it('is redrawn after <c-l>', function()
+      command('set laststatus=2')
+      screen:expect([[
+        ^                                                     |
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {1:[No Name]                                            }|
+                                                             |
+      ]])
+
+      feed('<c-l>')
+      screen:expect{grid=[[
+        ^                                                     |
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {1:[No Name]                                            }|
+                                                             |
+      ]], reset=true}
+
+      command('split')
+      screen:expect([[
+        ^                                                     |
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {1:[No Name]                                            }|
+                                                             |
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {3:[No Name]                                            }|
+                                                             |
+      ]])
+
+      feed('<c-l>')
+      screen:expect{grid=[[
+        ^                                                     |
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {1:[No Name]                                            }|
+                                                             |
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {3:[No Name]                                            }|
+                                                             |
+      ]], reset=true}
+    end)
+  end)
+
   describe('window', function()
     describe('split', function()
       it('horizontal', function()
@@ -446,6 +522,46 @@ local function screen_tests(linegrid)
         bar                                                  |
         bar                                                  |
         bar                                                  |
+                                                             |
+      ]])
+    end)
+
+    it('redraws unvisited tab #9152', function()
+      insert('hello')
+      -- create a tab without visiting it
+      command('tabnew|tabnext')
+      screen:expect([[
+        {2: + [No Name] }{4: [No Name] }{3:                            }{4:X}|
+        hell^o                                                |
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+                                                             |
+      ]])
+
+      feed('gT')
+      screen:expect([[
+        {4: + [No Name] }{2: [No Name] }{3:                            }{4:X}|
+        ^                                                     |
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
+        {0:~                                                    }|
                                                              |
       ]])
     end)
@@ -843,4 +959,47 @@ end)
 
 describe("Screen (line-based)", function()
   screen_tests(true)
+end)
+
+describe('Screen default colors', function()
+  local screen
+  local function startup(light, termcolors)
+    local extra = (light and ' background=light') or ''
+
+    local nvim_argv = {helpers.nvim_prog, '-u', 'NONE', '-i', 'NONE', '-N',
+                       '--cmd', 'set shortmess+=I noswapfile belloff= noshowcmd noruler'..extra,
+                       '--embed'}
+    local screen_nvim = spawn(nvim_argv)
+    set_session(screen_nvim)
+    screen = Screen.new()
+    screen:attach(termcolors and {rgb=true,ext_termcolors=true} or {rgb=true})
+  end
+
+  it('are dark per default', function()
+    startup(false, false)
+    screen:expect{condition=function()
+      eq({rgb_bg=0, rgb_fg=Screen.colors.White, rgb_sp=Screen.colors.Red,
+          cterm_bg=0, cterm_fg=0}, screen.default_colors)
+    end}
+  end)
+
+  it('can be set to light', function()
+    startup(true, false)
+    screen:expect{condition=function()
+      eq({rgb_bg=Screen.colors.White, rgb_fg=0, rgb_sp=Screen.colors.Red,
+          cterm_bg=0, cterm_fg=0}, screen.default_colors)
+    end}
+  end)
+
+  it('can be handled by external terminal', function()
+    startup(false, true)
+    screen:expect{condition=function()
+      eq({rgb_bg=-1, rgb_fg=-1, rgb_sp=-1, cterm_bg=0, cterm_fg=0}, screen.default_colors)
+    end}
+
+    startup(true, true)
+    screen:expect{condition=function()
+      eq({rgb_bg=-1, rgb_fg=-1, rgb_sp=-1, cterm_bg=0, cterm_fg=0}, screen.default_colors)
+    end}
+  end)
 end)

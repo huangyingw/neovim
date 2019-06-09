@@ -114,6 +114,15 @@ func Test_syntime()
   bd
 endfunc
 
+func Test_syntime_completion()
+  if !has('profile')
+    return
+  endif
+
+  call feedkeys(":syntime \<C-A>\<C-B>\"\<CR>", 'tx')
+  call assert_equal('"syntime clear off on report', @:)
+endfunc
+
 func Test_syntax_list()
   syntax on
   let a = execute('syntax list')
@@ -481,4 +490,50 @@ fun Test_synstack_synIDtrans()
 
   syn clear
   bw!
+endfunc
+
+" Using \z() in a region with NFA failing should not crash.
+func Test_syn_wrong_z_one()
+  new
+  call setline(1, ['just some text', 'with foo and bar to match with'])
+  syn region FooBar start="foo\z(.*\)bar" end="\z1"
+  " call test_override("nfa_fail", 1)
+  redraw!
+  redraw!
+  " call test_override("ALL", 0)
+  bwipe!
+endfunc
+
+func Test_syntax_hangs()
+  if !has('reltime') || !has('float') || !has('syntax')
+    return
+  endif
+
+  " This pattern takes a long time to match, it should timeout.
+  new
+  call setline(1, ['aaa', repeat('abc ', 1000), 'ccc'])
+  let start = reltime()
+  set nolazyredraw redrawtime=101
+  syn match Error /\%#=1a*.*X\@<=b*/
+  redraw
+  let elapsed = reltimefloat(reltime(start))
+  call assert_true(elapsed > 0.1)
+  call assert_true(elapsed < 1.0)
+
+  " second time syntax HL is disabled
+  let start = reltime()
+  redraw
+  let elapsed = reltimefloat(reltime(start))
+  call assert_true(elapsed < 0.1)
+
+  " after CTRL-L the timeout flag is reset
+  let start = reltime()
+  exe "normal \<C-L>"
+  redraw
+  let elapsed = reltimefloat(reltime(start))
+  call assert_true(elapsed > 0.1)
+  call assert_true(elapsed < 1.0)
+
+  set redrawtime&
+  bwipe!
 endfunc

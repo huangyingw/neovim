@@ -21,6 +21,7 @@ return {
     'BufWritePre',            -- before writing a buffer
     'ChanInfo',               -- info was received about channel
     'ChanOpen',               -- channel was opened
+    'CmdLineChanged',         -- command line was modified
     'CmdLineEnter',           -- after entering cmdline mode
     'CmdLineLeave',           -- before leaving cmdline mode
     'CmdUndefined',           -- command undefined
@@ -28,11 +29,13 @@ return {
     'CmdWinLeave',            -- before leaving the cmdline window
     'ColorScheme',            -- after loading a colorscheme
     'ColorSchemePre',         -- before loading a colorscheme
+    'CompleteChanged',        -- after popup menu changed
     'CompleteDone',           -- after finishing insert complete
     'CursorHold',             -- cursor in same position for a while
     'CursorHoldI',            -- idem, in Insert mode
     'CursorMoved',            -- cursor was moved
     'CursorMovedI',           -- cursor was moved in Insert mode
+    'DiffUpdated',            -- diffs have been updated
     'DirChanged',             -- directory changed
     'EncodingChanged',        -- after changing the 'encoding' option
     'ExitPre',                -- before exiting
@@ -62,7 +65,6 @@ return {
     'InsertCharPre',          -- before inserting a char
     'InsertEnter',            -- when entering Insert mode
     'InsertLeave',            -- when leaving Insert mode
-    'JobActivity',            -- when job sent some data
     'MenuPopup',              -- just before popup menu is displayed
     'OptionSet',              -- after setting any option
     'QuickFixCmdPost',        -- after :make, :grep etc.
@@ -72,6 +74,7 @@ return {
     'SessionLoadPost',        -- after loading a session file
     'ShellCmdPost',           -- after ":!cmd"
     'ShellFilterPost',        -- after ":1,2!cmd", ":w !cmd", ":r !cmd".
+    'Signal',                 -- after nvim process received a signal
     'SourceCmd',              -- sourcing a Vim script using command
     'SourcePre',              -- before sourcing a Vim script
     'SpellFileMissing',       -- spell file missing
@@ -85,7 +88,7 @@ return {
     'TabNew',                 -- when creating a new tab
     'TabNewEntered',          -- after entering a new tab
     'TermChanged',            -- after changing 'term'
-    'TermClose',              -- after the processs exits
+    'TermClose',              -- after the process exits
     'TermOpen',               -- after opening a terminal buffer
     'TermResponse',           -- after setting "v:termresponse"
     'TextChanged',            -- text was modified
@@ -113,6 +116,7 @@ return {
   -- syntax file
   nvim_specific = {
     DirChanged=true,
+    Signal=true,
     TabClosed=true,
     TabNew=true,
     TabNewEntered=true,

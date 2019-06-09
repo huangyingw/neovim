@@ -10,9 +10,10 @@ local wait = helpers.wait
 local retry = helpers.retry
 local curbufmeths = helpers.curbufmeths
 local nvim = helpers.nvim
+local expect_err = helpers.expect_err
 local feed_data = thelpers.feed_data
 
-describe('terminal scrollback', function()
+describe(':terminal scrollback', function()
   local screen
 
   before_each(function()
@@ -141,15 +142,15 @@ describe('terminal scrollback', function()
     describe('and height decreased by 1', function()
       if helpers.pending_win32(pending) then return end
       local function will_hide_top_line()
-        feed([[<C-\><C-N>:]])  -- Go to cmdline-mode, so cursor is at bottom.
+        feed([[<C-\><C-N>]])
         screen:try_resize(screen._width - 2, screen._height - 1)
         screen:expect([[
           line2                       |
           line3                       |
           line4                       |
           rows: 5, cols: 28           |
-          {2: }                           |
-          :^                           |
+          {2:^ }                           |
+                                      |
         ]])
       end
 
@@ -165,11 +166,11 @@ describe('terminal scrollback', function()
           screen:expect([[
             rows: 5, cols: 28         |
             rows: 3, cols: 26         |
-            {2: }                         |
-            :^                         |
+            {2:^ }                         |
+                                      |
           ]])
           eq(8, curbuf('line_count'))
-          feed([[<C-\><C-N>3k]])
+          feed([[3k]])
           screen:expect([[
             ^line4                     |
             rows: 5, cols: 28         |
@@ -344,7 +345,7 @@ describe('terminal scrollback', function()
   end)
 end)
 
-describe('terminal prints more lines than the screen height and exits', function()
+describe(':terminal prints more lines than the screen height and exits', function()
   it('will push extra lines to scrollback', function()
     clear()
     local screen = Screen.new(30, 7)
@@ -460,20 +461,15 @@ describe("'scrollback' option", function()
     screen:detach()
   end)
 
-  it('defaults to 10000 in terminal buffers', function()
+  it('defaults to 10000 in :terminal buffers', function()
     set_fake_shell()
     command('terminal')
     eq(10000, curbufmeths.get_option('scrollback'))
   end)
 
   it('error if set to invalid value', function()
-    local status, rv = pcall(command, 'set scrollback=-2')
-    eq(false, status)  -- assert failure
-    eq('E474:', string.match(rv, "E%d*:"))
-
-    status, rv = pcall(command, 'set scrollback=100001')
-    eq(false, status)  -- assert failure
-    eq('E474:', string.match(rv, "E%d*:"))
+    expect_err('E474:', command, 'set scrollback=-2')
+    expect_err('E474:', command, 'set scrollback=100001')
   end)
 
   it('defaults to -1 on normal buffers', function()
@@ -481,25 +477,41 @@ describe("'scrollback' option", function()
     eq(-1, curbufmeths.get_option('scrollback'))
   end)
 
-  it(':setlocal in a normal buffer is an error', function()
+  it(':setlocal in a :terminal buffer', function()
+    set_fake_shell()
+
+    -- _Global_ scrollback=-1 defaults :terminal to 10_000.
+    command('setglobal scrollback=-1')
+    command('terminal')
+    eq(10000, curbufmeths.get_option('scrollback'))
+
+    -- _Local_ scrollback=-1 in :terminal forces the _maximum_.
+    command('setlocal scrollback=-1')
+    retry(nil, nil, function()  -- Fixup happens on refresh, not immediately.
+      eq(100000, curbufmeths.get_option('scrollback'))
+    end)
+
+    -- _Local_ scrollback=-1 during TermOpen forces the maximum. #9605
+    command('setglobal scrollback=-1')
+    command('autocmd TermOpen * setlocal scrollback=-1')
+    command('terminal')
+    eq(100000, curbufmeths.get_option('scrollback'))
+  end)
+
+  it(':setlocal in a normal buffer', function()
     command('new')
-
-    -- :setlocal to -1 is NOT an error.
-    feed_command('setlocal scrollback=-1')
-    eq(nil, string.match(eval("v:errmsg"), "E%d*:"))
-    feed('<CR>')
-
-    -- :setlocal to anything except -1 is an error.
-    feed_command('setlocal scrollback=42')
-    feed('<CR>')
-    eq('E474:', string.match(eval("v:errmsg"), "E%d*:"))
+    -- :setlocal to -1.
+    command('setlocal scrollback=-1')
     eq(-1, curbufmeths.get_option('scrollback'))
+    -- :setlocal to anything except -1. Currently, this just has no effect.
+    command('setlocal scrollback=42')
+    eq(42, curbufmeths.get_option('scrollback'))
   end)
 
   it(':set updates local value and global default', function()
     set_fake_shell()
-    command('set scrollback=42')                  -- set global and (attempt) local
-    eq(-1, curbufmeths.get_option('scrollback'))  -- normal buffer: -1
+    command('set scrollback=42')                  -- set global value
+    eq(42, curbufmeths.get_option('scrollback'))
     command('terminal')
     eq(42, curbufmeths.get_option('scrollback'))  -- inherits global default
     command('setlocal scrollback=99')

@@ -24,6 +24,10 @@
 #include "nvim/undo.h"
 #include "nvim/ascii.h"
 
+#ifdef WIN32
+#include "nvim/os/os.h"
+#endif
+
 #include "nvim/lua/executor.h"
 #include "nvim/lua/converter.h"
 
@@ -50,7 +54,8 @@ static void nlua_error(lua_State *const lstate, const char *const msg)
   size_t len;
   const char *const str = lua_tolstring(lstate, -1, &len);
 
-  emsgf(msg, (int)len, str);
+  msg_ext_set_kind("lua_error");
+  emsgf_multiline(msg, (int)len, str);
 
   lua_pop(lstate, 1);
 }
@@ -103,6 +108,35 @@ static int nlua_stricmp(lua_State *const lstate) FUNC_ATTR_NONNULL_ALL
   return 1;
 }
 
+static void nlua_schedule_event(void **argv)
+{
+  LuaRef cb = (LuaRef)(ptrdiff_t)argv[0];
+  lua_State *const lstate = nlua_enter();
+  nlua_pushref(lstate, cb);
+  nlua_unref(lstate, cb);
+  if (lua_pcall(lstate, 0, 0, 0)) {
+    nlua_error(lstate, _("Error executing vim.schedule lua callback: %.*s"));
+  }
+}
+
+/// Schedule Lua callback on main loop's event queue
+///
+/// @param  lstate  Lua interpreter state.
+static int nlua_schedule(lua_State *const lstate)
+  FUNC_ATTR_NONNULL_ALL
+{
+  if (lua_type(lstate, 1) != LUA_TFUNCTION) {
+    lua_pushliteral(lstate, "vim.schedule: expected function");
+    return lua_error(lstate);
+  }
+
+  LuaRef cb = nlua_ref(lstate, 1);
+
+  multiqueue_put(main_loop.events, nlua_schedule_event,
+                 1, (void *)(ptrdiff_t)cb);
+  return 0;
+}
+
 /// Initialize lua interpreter state
 ///
 /// Called by lua interpreter itself to initialize state.
@@ -118,6 +152,14 @@ static int nlua_state_init(lua_State *const lstate) FUNC_ATTR_NONNULL_ALL
   lua_setfield(lstate, -2, "debug");
   lua_pop(lstate, 1);
 
+#ifdef WIN32
+  // os.getenv
+  lua_getglobal(lstate, "os");
+  lua_pushcfunction(lstate, &nlua_getenv);
+  lua_setfield(lstate, -2, "getenv");
+  lua_pop(lstate, 1);
+#endif
+
   // vim
   if (luaL_dostring(lstate, (char *)&vim_module[0])) {
     nlua_error(lstate, _("E5106: Error while creating vim module: %.*s"));
@@ -130,6 +172,9 @@ static int nlua_state_init(lua_State *const lstate) FUNC_ATTR_NONNULL_ALL
   // stricmp
   lua_pushcfunction(lstate, &nlua_stricmp);
   lua_setfield(lstate, -2, "stricmp");
+  // schedule
+  lua_pushcfunction(lstate, &nlua_schedule);
+  lua_setfield(lstate, -2, "schedule");
 
   lua_setglobal(lstate, "vim");
   return 0;
@@ -297,7 +342,7 @@ nlua_print_error:
   return 0;
 }
 
-/// debug.debug implementation: interaction with user while debugging
+/// debug.debug: interaction with user while debugging.
 ///
 /// @param  lstate  Lua interpreter state.
 int nlua_debug(lua_State *lstate)
@@ -335,6 +380,46 @@ int nlua_debug(lua_State *lstate)
     }
   }
   return 0;
+}
+
+#ifdef WIN32
+/// os.getenv: override os.getenv to maintain coherency. #9681
+///
+/// uv_os_setenv uses SetEnvironmentVariableW which does not update _environ.
+///
+/// @param  lstate  Lua interpreter state.
+static int nlua_getenv(lua_State *lstate)
+{
+  lua_pushstring(lstate, os_getenv(luaL_checkstring(lstate, 1)));
+  return 1;
+}
+#endif
+
+/// add the value to the registry
+LuaRef nlua_ref(lua_State *lstate, int index)
+{
+  lua_pushvalue(lstate, index);
+  return luaL_ref(lstate, LUA_REGISTRYINDEX);
+}
+
+/// remove the value from the registry
+void nlua_unref(lua_State *lstate, LuaRef ref)
+{
+  if (ref > 0) {
+    luaL_unref(lstate, LUA_REGISTRYINDEX, ref);
+  }
+}
+
+void executor_free_luaref(LuaRef ref)
+{
+  lua_State *const lstate = nlua_enter();
+  nlua_unref(lstate, ref);
+}
+
+/// push a value referenced in the regirstry
+void nlua_pushref(lua_State *lstate, LuaRef ref)
+{
+  lua_rawgeti(lstate, LUA_REGISTRYINDEX, ref);
 }
 
 /// Evaluate lua string
@@ -425,9 +510,29 @@ Object executor_exec_lua_api(const String str, const Array args, Error *err)
     return NIL;
   }
 
-  return nlua_pop_Object(lstate, err);
+  return nlua_pop_Object(lstate, false, err);
 }
 
+Object executor_exec_lua_cb(LuaRef ref, const char *name, Array args)
+{
+  lua_State *const lstate = nlua_enter();
+  nlua_pushref(lstate, ref);
+  lua_pushstring(lstate, name);
+  for (size_t i = 0; i < args.size; i++) {
+    nlua_push_Object(lstate, args.items[i]);
+  }
+
+  if (lua_pcall(lstate, (int)args.size+1, 1, 0)) {
+    // TODO(bfredl): callbacks:s might not always be msg-safe, for instance
+    // lua callbacks for redraw events. Later on let the caller deal with the
+    // error instead.
+    nlua_error(lstate, _("Error executing lua callback: %.*s"));
+    return NIL;
+  }
+  Error err = ERROR_INIT;
+
+  return nlua_pop_Object(lstate, false, &err);
+}
 
 /// Run lua string
 ///

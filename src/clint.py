@@ -29,10 +29,10 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""Does neovim-lint on c files.
+"""Lints C files in the Neovim source tree.
 
 The goal of this script is to identify places in the code that *may*
-be in non-compliance with neovim style.  It does not attempt to fix
+be in non-compliance with Neovim style.  It does not attempt to fix
 up these problems -- the point is to educate.  It does also not
 attempt to find all problems, or to ensure that everything it does
 find is legitimately a problem.
@@ -88,7 +88,7 @@ Syntax: clint.py [--verbose=#] [--output=vs7] [--filter=-x,+y,...]
    * [whitespace/braces] { should almost always be at the end of the previous
      line
    * [build/include] Include the directory when naming .h files
-   * [runtime/int] Use int16/int64/etc, rather than the C type.
+   * [runtime/int] Use int16_t/int64_t/etc, rather than the C type.
 
   Every problem is given a confidence score from 1-5, with 5 meaning we are
   certain of the problem, and 1 meaning it could be a legitimate construct.
@@ -233,38 +233,6 @@ _ERROR_CATEGORIES = [
 # off by default (i.e., categories that must be enabled by the --filter= flags).
 # All entries here should start with a '-' or '+', as in the --filter= flag.
 _DEFAULT_FILTERS = ['-build/include_alpha']
-
-# We used to check for high-bit characters, but after much discussion we
-# decided those were OK, as long as they were in UTF-8 and didn't represent
-# hard-coded international strings, which belong in a separate i18n file.
-
-# Alternative tokens and their replacements.  For full list, see section 2.5
-# Alternative tokens [lex.digraph] in the C++ standard.
-#
-# Digraphs (such as '%:') are not included here since it's a mess to
-# match those on a word boundary.
-_ALT_TOKEN_REPLACEMENT = {
-    'and': '&&',
-    'bitor': '|',
-    'or': '||',
-    'xor': '^',
-    'compl': '~',
-    'bitand': '&',
-    'and_eq': '&=',
-    'or_eq': '|=',
-    'xor_eq': '^=',
-    'not': '!',
-    'not_eq': '!='
-}
-
-# Compile regular expression that matches all the above keywords.  The "[ =()]"
-# bit is meant to avoid matching these keywords outside of boolean expressions.
-#
-# False positives include C-style multi-line comments and multi-line strings
-# but those have always been troublesome for cpplint.
-_ALT_TOKEN_REPLACEMENT_PATTERN = re.compile(
-    r'[ =()](' + ('|'.join(_ALT_TOKEN_REPLACEMENT.keys())) + r')(?=[ (]|$)')
-
 
 # These constants define types of headers for use with
 # _IncludeState.CheckNextIncludeOrder().
@@ -1487,6 +1455,37 @@ def CheckMemoryFunctions(filename, clean_lines, linenum, error):
                   '...) instead of ' + function + '...).')
 
 
+os_functions = (
+    ('setenv(', 'os_setenv('),
+    ('getenv(', 'os_getenv('),
+    ('_wputenv(', 'os_setenv('),
+    ('_putenv_s(', 'os_setenv('),
+    ('putenv(', 'os_setenv('),
+    ('unsetenv(', 'os_unsetenv('),
+)
+
+
+def CheckOSFunctions(filename, clean_lines, linenum, error):
+    """Checks for calls to invalid functions.
+
+    Args:
+      filename: The name of the current file.
+      clean_lines: A CleansedLines instance containing the file.
+      linenum: The number of the line to check.
+      error: The function to call with any errors found.
+    """
+    line = clean_lines.elided[linenum]
+    for function, suggested_function in os_functions:
+        ix = line.find(function)
+        # Comparisons made explicit for clarity -- pylint:
+        # disable=g-explicit-bool-comparison
+        if ix >= 0 and (ix == 0 or (not line[ix - 1].isalnum() and
+                                    line[ix - 1] not in ('_', '.', '>'))):
+            error(filename, linenum, 'runtime/os_fn', 2,
+                  'Use ' + suggested_function +
+                  '...) instead of ' + function + '...).')
+
+
 # Matches invalid increment: *count++, which moves pointer instead of
 # incrementing a value.
 _RE_PATTERN_INVALID_INCREMENT = re.compile(
@@ -2540,6 +2539,8 @@ def CheckSpacing(filename, clean_lines, linenum, nesting_state, error):
                    r'(?<!\bkbtree_t)'
                    r'(?<!\bkbitr_t)'
                    r'(?<!\bPMap)'
+                   r'(?<!\bArrayOf)'
+                   r'(?<!\bDictionaryOf)'
                    r'\((?:const )?(?:struct )?[a-zA-Z_]\w*(?: *\*(?:const)?)*\)'
                    r' +'
                    r'-?(?:\*+|&)?(?:\w+|\+\+|--|\()', cast_line)
@@ -2837,38 +2838,6 @@ def CheckEmptyBlockBody(filename, clean_lines, linenum, error):
                       'Empty loop bodies should use {} or continue')
 
 
-def CheckAltTokens(filename, clean_lines, linenum, error):
-    """Check alternative keywords being used in boolean expressions.
-
-    Args:
-      filename: The name of the current file.
-      clean_lines: A CleansedLines instance containing the file.
-      linenum: The number of the line to check.
-      error: The function to call with any errors found.
-    """
-    line = clean_lines.elided[linenum]
-
-    # Avoid preprocessor lines
-    if Match(r'^\s*#', line):
-        return
-
-    # Last ditch effort to avoid multi-line comments.  This will not help
-    # if the comment started before the current line or ended after the
-    # current line, but it catches most of the false positives.  At least,
-    # it provides a way to workaround this warning for people who use
-    # multi-line comments in preprocessor macros.
-    #
-    # TODO(unknown): remove this once cpplint has better support for
-    # multi-line comments.
-    if line.find('/*') >= 0 or line.find('*/') >= 0:
-        return
-
-    for match in _ALT_TOKEN_REPLACEMENT_PATTERN.finditer(line):
-        error(filename, linenum, 'readability/alt_tokens', 2,
-              'Use operator %s instead of %s' % (
-                  _ALT_TOKEN_REPLACEMENT[match.group(1)], match.group(1)))
-
-
 def GetLineWidth(line):
     """Determines the width of the line in column positions.
 
@@ -2992,7 +2961,6 @@ def CheckStyle(filename, clean_lines, linenum, file_extension, nesting_state,
     CheckBraces(filename, clean_lines, linenum, error)
     CheckEmptyBlockBody(filename, clean_lines, linenum, error)
     CheckSpacing(filename, clean_lines, linenum, nesting_state, error)
-    CheckAltTokens(filename, clean_lines, linenum, error)
 
 
 _RE_PATTERN_INCLUDE_NEW_STYLE = re.compile(r'#include +"[^/]+\.h"')
@@ -3215,7 +3183,7 @@ def CheckLanguage(filename, clean_lines, linenum, file_extension,
                           r'|li_(?:next|prev|tv))\b', line)
         if match:
             error(filename, linenum, 'runtime/deprecated', 4,
-                  'Accessing list_T internals directly is prohibited')
+                  'Accessing list_T internals directly is prohibited (hint: see commit d46e37cb4c71)')
 
     # Check for suspicious usage of "if" like
     # } if (a == b) {
@@ -3370,6 +3338,7 @@ def ProcessLine(filename, file_extension, clean_lines, line,
                                   nesting_state, error)
     CheckPosixThreading(filename, clean_lines, line, error)
     CheckMemoryFunctions(filename, clean_lines, line, error)
+    CheckOSFunctions(filename, clean_lines, line, error)
     for check_fn in extra_check_functions:
         check_fn(filename, clean_lines, line, error)
 

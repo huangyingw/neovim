@@ -51,6 +51,10 @@ describe("shell command :!", function()
   end)
 
   it("throttles shell-command output greater than ~10KB", function()
+    if helpers.skip_fragile(pending,
+        (os.getenv("TRAVIS") and helpers.os_name() == "osx")) then
+      return
+    end
     child_session.feed_data(
       ":!for i in $(seq 2 30000); do echo XXXXXXXXXX $i; done\n")
 
@@ -68,7 +72,12 @@ describe("shell command :!", function()
                                                         |
       {10:Press ENTER or type command to continue}{1: }          |
       {3:-- TERMINAL --}                                    |
-    ]])
+    ]], {
+      -- test/functional/helpers.lua defaults to background=light.
+      [1] = {reverse = true},
+      [3] = {bold = true},
+      [10] = {foreground = 2},
+    })
   end)
 end)
 

@@ -955,8 +955,9 @@ someerror:
             break;
         }
         if (ml_append_buf(slang->sl_sugbuf, (linenr_T)wordnr,
-                ga.ga_data, ga.ga_len, TRUE) == FAIL)
+                          ga.ga_data, ga.ga_len, true) == FAIL) {
           goto someerror;
+        }
       }
       ga_clear(&ga);
 
@@ -1445,8 +1446,7 @@ static int read_compound(FILE *fd, slang_T *slang, int len)
     // Copy flag to "sl_comprules", unless we run into a wildcard.
     if (crp != NULL) {
       if (c == '?' || c == '+' || c == '*') {
-        xfree(slang->sl_comprules);
-        slang->sl_comprules = NULL;
+        XFREE_CLEAR(slang->sl_comprules);
         crp = NULL;
       } else
         *crp++ = c;
@@ -3227,7 +3227,7 @@ static int get_pfxlist(afffile_T *affile, char_u *afflist, char_u *store_afflist
     prevp = p;
     if (get_affitem(affile->af_flagtype, &p) != 0) {
       // A flag is a postponed prefix flag if it appears in "af_pref"
-      // and it's ID is not zero.
+      // and its ID is not zero.
       STRLCPY(key, prevp, p - prevp + 1);
       hi = hash_find(&affile->af_pref, key);
       if (!HASHITEM_EMPTY(hi)) {
@@ -4311,8 +4311,8 @@ static int write_vim_spell(spellinfo_T *spin, char_u *fname)
       qsort(gap->ga_data, (size_t)gap->ga_len,
           sizeof(fromto_T), rep_compare);
 
-    int i = round == 1 ? SN_REP : (round == 2 ? SN_SAL : SN_REPSAL);
-    putc(i, fd);                                        // <sectionID>
+    int sect_id = round == 1 ? SN_REP : (round == 2 ? SN_SAL : SN_REPSAL);
+    putc(sect_id, fd);                                  // <sectionID>
 
     // This is for making suggestions, section is not required.
     putc(0, fd);                                        // <sectionflags>
@@ -4920,9 +4920,10 @@ sug_filltable (
       ((char_u *)gap->ga_data)[gap->ga_len++] = NUL;
 
       if (ml_append_buf(spin->si_spellbuf, (linenr_T)wordnr,
-              gap->ga_data, gap->ga_len, TRUE) == FAIL)
+                        gap->ga_data, gap->ga_len, true) == FAIL) {
         return -1;
-      ++wordnr;
+      }
+      wordnr++;
 
       // Remove extra NUL entries, we no longer need them. We don't
       // bother freeing the nodes, the won't be reused anyway.

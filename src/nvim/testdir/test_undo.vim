@@ -242,6 +242,7 @@ func Test_undojoin()
 endfunc
 
 func Test_undo_write()
+  call delete('Xtest')
   split Xtest
   call feedkeys("ione one one\<Esc>", 'xt')
   w!
@@ -373,7 +374,7 @@ funct Test_undofile()
   let cwd = getcwd()
   if has('win32')
     " Replace windows drive such as C:... into C%...
-    let cwd = substitute(cwd, '^\([A-Z]\):', '\1%', 'g')
+    let cwd = substitute(cwd, '^\([a-zA-Z]\):', '\1%', 'g')
   endif
   let pathsep = has('win32') ? '\' : '/'
   let cwd = substitute(cwd . pathsep . 'Xundofoo', pathsep, '%', 'g')
@@ -387,6 +388,15 @@ funct Test_undofile()
 
   " Test undofile() with 'undodir' set to a non-existing directory.
   " call assert_equal('', undofile('Xundofoo'))
+
+  if isdirectory('/tmp')
+    set undodir=/tmp
+    if has('osx')
+      call assert_equal('/tmp/%private%tmp%file', undofile('///tmp/file'))
+    else
+      call assert_equal('/tmp/%tmp%file', undofile('///tmp/file'))
+    endif
+  endif
 
   set undodir&
 endfunc

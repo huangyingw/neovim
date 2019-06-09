@@ -26,7 +26,7 @@
 " It will be called after each Test_ function.
 "
 " When debugging a test it can be useful to add messages to v:errors:
-" 	call add(v:errors, "this happened")
+"	call add(v:errors, "this happened")
 
 
 " Check that the screen size is at least 24 x 80 characters.
@@ -129,6 +129,10 @@ func RunTheTest(test)
       call add(v:errors, 'Caught exception in ' . a:test . ': ' . v:exception . ' @ ' . v:throwpoint)
     endtry
   endif
+
+  " In case 'insertmode' was set and something went wrong, make sure it is
+  " reset to avoid trouble with anything else.
+  set noinsertmode
 
   if exists("*TearDown")
     try
@@ -245,6 +249,7 @@ let s:flaky = [
       \ 'Test_oneshot()',
       \ 'Test_out_cb()',
       \ 'Test_paused()',
+      \ 'Test_popup_and_window_resize()',
       \ 'Test_quoteplus()',
       \ 'Test_quotestar()',
       \ 'Test_reltime()',
@@ -271,28 +276,47 @@ endif
 for s:test in sort(s:tests)
   " Silence, please!
   set belloff=all
+  let prev_error = ''
+  let total_errors = []
+  let run_nr = 1
 
   call RunTheTest(s:test)
 
+  " Repeat a flaky test.  Give up when:
+  " - it fails again with the same message
+  " - it fails five times (with a different mesage)
   if len(v:errors) > 0 && index(s:flaky, s:test) >= 0
-    call add(s:messages, 'Found errors in ' . s:test . ':')
-    call extend(s:messages, v:errors)
-    call add(s:messages, 'Flaky test failed, running it again')
-    let first_run = v:errors
+    while 1
+      call add(s:messages, 'Found errors in ' . s:test . ':')
+      call extend(s:messages, v:errors)
 
-    " Flakiness is often caused by the system being very busy.  Sleep a couple
-    " of seconds to have a higher chance of succeeding the second time.
-    sleep 2
+      call add(total_errors, 'Run ' . run_nr . ':')
+      call extend(total_errors, v:errors)
 
-    let v:errors = []
-    call RunTheTest(s:test)
-    if len(v:errors) > 0
-      let second_run = v:errors
-      let v:errors = ['First run:']
-      call extend(v:errors, first_run)
-      call add(v:errors, 'Second run:')
-      call extend(v:errors, second_run)
-    endif
+      if run_nr == 5 || prev_error == v:errors[0]
+        call add(total_errors, 'Flaky test failed too often, giving up')
+        let v:errors = total_errors
+        break
+      endif
+
+      call add(s:messages, 'Flaky test failed, running it again')
+
+      " Flakiness is often caused by the system being very busy.  Sleep a
+      " couple of seconds to have a higher chance of succeeding the second
+      " time.
+      sleep 2
+
+      let prev_error = v:errors[0]
+      let v:errors = []
+      let run_nr += 1
+
+      call RunTheTest(s:test)
+
+      if len(v:errors) == 0
+        " Test passed on rerun.
+        break
+      endif
+    endwhile
   endif
 
   call AfterTheTest()

@@ -1,6 +1,5 @@
 local helpers = require('test.functional.helpers')(after_each)
 local Screen = require('test.functional.ui.screen')
-local global_helpers = require('test.helpers')
 
 local NIL = helpers.NIL
 local clear, nvim, eq, neq = helpers.clear, helpers.nvim, helpers.eq, helpers.neq
@@ -14,11 +13,12 @@ local ok, nvim_async, feed = helpers.ok, helpers.nvim_async, helpers.feed
 local os_name = helpers.os_name
 local request = helpers.request
 local source = helpers.source
+local next_msg = helpers.next_msg
 
-local expect_err = global_helpers.expect_err
-local format_string = global_helpers.format_string
-local intchar2lua = global_helpers.intchar2lua
-local mergedicts_copy = global_helpers.mergedicts_copy
+local expect_err = helpers.expect_err
+local format_string = helpers.format_string
+local intchar2lua = helpers.intchar2lua
+local mergedicts_copy = helpers.mergedicts_copy
 
 describe('API', function()
   before_each(clear)
@@ -44,6 +44,32 @@ describe('API', function()
     --      "Packer instance already working. Use another Packer ..."
     expect_err("can't serialize object$",
                request, nil)
+  end)
+
+  it('handles errors in async requests', function()
+    local error_types = meths.get_api_info()[2].error_types
+    nvim_async('bogus')
+    eq({'notification', 'nvim_error_event',
+        {error_types.Exception.id, 'Invalid method: nvim_bogus'}}, next_msg())
+    -- error didn't close channel.
+    eq(2, eval('1+1'))
+  end)
+
+  it('failed async request emits nvim_error_event', function()
+    local error_types = meths.get_api_info()[2].error_types
+    nvim_async('command', 'bogus')
+    eq({'notification', 'nvim_error_event',
+        {error_types.Exception.id, 'Vim:E492: Not an editor command: bogus'}},
+        next_msg())
+    -- error didn't close channel.
+    eq(2, eval('1+1'))
+  end)
+
+  it('does not set CA_COMMAND_BUSY #7254', function()
+    nvim('command', 'split')
+    nvim('command', 'autocmd WinEnter * startinsert')
+    nvim('command', 'wincmd w')
+    eq({mode='i', blocking=false}, nvim("get_mode"))
   end)
 
   describe('nvim_command', function()
@@ -73,7 +99,7 @@ describe('API', function()
     end)
 
     it('VimL execution error: fails with specific error', function()
-      local status, rv = pcall(nvim, "command_output", "buffer 23487")
+      local status, rv = pcall(nvim, "command", "buffer 23487")
       eq(false, status)                 -- nvim_command() failed.
       eq("E86: Buffer 23487 does not exist", string.match(rv, "E%d*:.*"))
       eq('', eval('v:errmsg'))  -- v:errmsg was not updated.
@@ -308,6 +334,10 @@ describe('API', function()
       eq({false, 'Error executing lua: [string "<nvim>"]:1: '..
                  "attempt to call global 'bork' (a nil value)"},
          meth_pcall(meths.execute_lua, 'bork()', {}))
+
+      eq({false, 'Error executing lua: [string "<nvim>"]:1: '..
+                 "did\nthe\nfail"},
+         meth_pcall(meths.execute_lua, 'error("did\\nthe\\nfail")', {}))
     end)
   end)
 
@@ -341,8 +371,8 @@ describe('API', function()
     end)
   end)
 
-  describe('nvim_get_var, nvim_set_var, nvim_del_var', function()
-    it('works', function()
+  describe('set/get/del variables', function()
+    it('nvim_get_var, nvim_set_var, nvim_del_var', function()
       nvim('set_var', 'lua', {1, 2, {['3'] = 1}})
       eq({1, 2, {['3'] = 1}}, nvim('get_var', 'lua'))
       eq({1, 2, {['3'] = 1}}, nvim('eval', 'g:lua'))
@@ -351,9 +381,20 @@ describe('API', function()
       eq(0, funcs.exists('g:lua'))
       eq({false, "Key not found: lua"}, meth_pcall(meths.del_var, 'lua'))
       meths.set_var('lua', 1)
+
+      -- Set locked g: var.
       command('lockvar lua')
       eq({false, 'Key is locked: lua'}, meth_pcall(meths.del_var, 'lua'))
       eq({false, 'Key is locked: lua'}, meth_pcall(meths.set_var, 'lua', 1))
+    end)
+
+    it('nvim_get_vvar, nvim_set_vvar', function()
+      -- Set readonly v: var.
+      expect_err('Key is read%-only: count$', request,
+                 'nvim_set_vvar', 'count', 42)
+      -- Set writable v: var.
+      meths.set_vvar('errmsg', 'set by API')
+      eq('set by API', meths.get_vvar('errmsg'))
     end)
 
     it('vim_set_var returns the old value', function()
@@ -841,10 +882,6 @@ describe('API', function()
     end)
 
     it('works for job channel', function()
-      if iswin() and os.getenv('APPVEYOR') ~= nil then
-        pending("jobstart(['cat']) unreliable on appveyor")
-        return
-      end
       eq(3, eval("jobstart(['cat'], {'rpc': v:true})"))
       local info = {
         stream='job',
@@ -855,7 +892,7 @@ describe('API', function()
       eq({info=info}, meths.get_var("opened_event"))
       eq({[1]=testinfo,[2]=stderr,[3]=info}, meths.list_chans())
       eq(info, meths.get_chan_info(3))
-      eval('rpcrequest(3, "nvim_set_client_info", "cat", {}, "remote",'..
+      eval('rpcrequest(3, "nvim_set_client_info", "amazing-cat", {}, "remote",'..
                        '{"nvim_command":{"n_args":1}},'.. -- and so on
                        '{"description":"The Amazing Cat"})')
       info = {
@@ -863,7 +900,7 @@ describe('API', function()
         id=3,
         mode='rpc',
         client = {
-          name='cat',
+          name='amazing-cat',
           version={major=0},
           type='remote',
           methods={nvim_command={n_args=1}},
@@ -872,6 +909,9 @@ describe('API', function()
       }
       eq({info=info}, meths.get_var("info_event"))
       eq({[1]=testinfo,[2]=stderr,[3]=info}, meths.list_chans())
+
+      eq({false, "Vim:Error invoking 'nvim_set_current_buf' on channel 3 (amazing-cat):\nWrong type for argument 1, expecting Buffer"},
+         meth_pcall(eval, 'rpcrequest(3, "nvim_set_current_buf", -1)'))
     end)
 
     it('works for :terminal channel', function()
@@ -1241,12 +1281,12 @@ describe('API', function()
 
   describe('nvim_list_uis', function()
     it('returns empty if --headless', function()
-      -- --embed implies --headless.
+      -- Test runner defaults to --headless.
       eq({}, nvim("list_uis"))
     end)
     it('returns attached UIs', function()
       local screen = Screen.new(20, 4)
-      screen:attach()
+      screen:attach({override=true})
       local expected = {
         {
           chan = 1,
@@ -1255,9 +1295,13 @@ describe('API', function()
           ext_tabline = false,
           ext_wildmenu = false,
           ext_linegrid = screen._options.ext_linegrid or false,
-          ext_hlstate=false,
+          ext_multigrid = false,
+          ext_hlstate = false,
+          ext_termcolors = false,
+          ext_messages = false,
           height = 4,
           rgb = true,
+          override = true,
           width = 20,
         }
       }
@@ -1267,10 +1311,123 @@ describe('API', function()
       screen = Screen.new(44, 99)
       screen:attach({ rgb = false })
       expected[1].rgb = false
+      expected[1].override = false
       expected[1].width = 44
       expected[1].height = 99
       eq(expected, nvim("list_uis"))
     end)
   end)
 
+  describe('nvim_create_namespace', function()
+    it('works', function()
+      eq({}, meths.get_namespaces())
+      eq(1, meths.create_namespace("ns-1"))
+      eq(2, meths.create_namespace("ns-2"))
+      eq(1, meths.create_namespace("ns-1"))
+      eq({["ns-1"]=1, ["ns-2"]=2}, meths.get_namespaces())
+      eq(3, meths.create_namespace(""))
+      eq(4, meths.create_namespace(""))
+      eq({["ns-1"]=1, ["ns-2"]=2}, meths.get_namespaces())
+    end)
+  end)
+
+  describe('nvim_create_buf', function()
+    it('works', function()
+      eq({id=2}, meths.create_buf(true, false))
+      eq({id=3}, meths.create_buf(false, false))
+      eq('  1 %a   "[No Name]"                    line 1\n'..
+         '  2  h   "[No Name]"                    line 0',
+         meths.command_output("ls"))
+      -- current buffer didn't change
+      eq({id=1}, meths.get_current_buf())
+
+      local screen = Screen.new(20, 4)
+      screen:attach()
+      meths.buf_set_lines(2, 0, -1, true, {"some text"})
+      meths.set_current_buf(2)
+      screen:expect([[
+        ^some text           |
+        {1:~                   }|
+        {1:~                   }|
+                            |
+      ]], {
+        [1] = {bold = true, foreground = Screen.colors.Blue1},
+      })
+    end)
+
+    it('can change buftype before visiting', function()
+      meths.set_option("hidden", false)
+      eq({id=2}, meths.create_buf(true, false))
+      meths.buf_set_option(2, "buftype", "nofile")
+      meths.buf_set_lines(2, 0, -1, true, {"test text"})
+      command("split | buffer 2")
+      eq({id=2}, meths.get_current_buf())
+      -- if the buf_set_option("buftype") didn't work, this would error out.
+      command("close")
+      eq({id=1}, meths.get_current_buf())
+    end)
+
+    it("doesn't cause BufEnter or BufWinEnter autocmds", function()
+      command("let g:fired = v:false")
+      command("au BufEnter,BufWinEnter * let g:fired = v:true")
+
+      eq({id=2}, meths.create_buf(true, false))
+      meths.buf_set_lines(2, 0, -1, true, {"test", "text"})
+
+      eq(false, eval('g:fired'))
+    end)
+
+    it('|scratch-buffer|', function()
+      eq({id=2}, meths.create_buf(false, true))
+      eq({id=3}, meths.create_buf(true, true))
+      eq({id=4}, meths.create_buf(true, true))
+      local scratch_bufs = { 2, 3, 4 }
+      eq('  1 %a   "[No Name]"                    line 1\n'..
+         '  3  h   "[Scratch]"                    line 0\n'..
+         '  4  h   "[Scratch]"                    line 0',
+         meths.command_output("ls"))
+      -- current buffer didn't change
+      eq({id=1}, meths.get_current_buf())
+
+      local screen = Screen.new(20, 4)
+      screen:set_default_attr_ids({
+        [1] = {bold = true, foreground = Screen.colors.Blue1},
+      })
+      screen:attach()
+
+      --
+      -- Editing a scratch-buffer does NOT change its properties.
+      --
+      local edited_buf = 2
+      meths.buf_set_lines(edited_buf, 0, -1, true, {"some text"})
+      for _,b in ipairs(scratch_bufs) do
+        eq('nofile', meths.buf_get_option(b, 'buftype'))
+        eq('hide', meths.buf_get_option(b, 'bufhidden'))
+        eq(false, meths.buf_get_option(b, 'swapfile'))
+      end
+
+      --
+      -- Visiting a scratch-buffer DOES NOT change its properties.
+      --
+      meths.set_current_buf(edited_buf)
+      screen:expect([[
+        ^some text           |
+        {1:~                   }|
+        {1:~                   }|
+                            |
+      ]])
+      eq('nofile', meths.buf_get_option(edited_buf, 'buftype'))
+      eq('hide', meths.buf_get_option(edited_buf, 'bufhidden'))
+      eq(false, meths.buf_get_option(edited_buf, 'swapfile'))
+
+      -- scratch buffer can be wiped without error
+      command('bwipe')
+      screen:expect([[
+        ^                    |
+        {1:~                   }|
+        {1:~                   }|
+                            |
+      ]])
+    end)
+  end)
 end)

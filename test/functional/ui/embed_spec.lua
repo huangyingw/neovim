@@ -8,7 +8,7 @@ local clear = helpers.clear
 local function test_embed(ext_linegrid)
   local screen
   local function startup(...)
-    clear{headless=false, args={...}}
+    clear{args_rm={'--headless'}, args={...}}
 
     -- attach immediately after startup, for early UI
     screen = Screen.new(60, 8)
@@ -17,6 +17,7 @@ local function test_embed(ext_linegrid)
       [1] = {foreground = Screen.colors.Grey100, background = Screen.colors.Red},
       [2] = {bold = true, foreground = Screen.colors.SeaGreen4},
       [3] = {bold = true, foreground = Screen.colors.Blue1},
+      [4] = {bold = true, foreground = Screen.colors.Green},
     })
   end
 
@@ -27,9 +28,9 @@ local function test_embed(ext_linegrid)
                                                                   |
                                                                   |
                                                                   |
+                                                                  |
       Error detected while processing pre-vimrc command line:     |
       E121: Undefined variable: invalid                           |
-      E15: Invalid expression: invalid+                           |
       Press ENTER or type command to continue^                     |
     ]])
 
@@ -56,7 +57,7 @@ local function test_embed(ext_linegrid)
       Error detected while processing pre-vimrc command line:     |
       foo                                                         |
       {1:bar}                                                         |
-      {2:Press ENTER or type command to continue}^                     |
+      {4:Press ENTER or type command to continue}^                     |
     ]])
   end)
 
