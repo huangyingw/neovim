@@ -635,7 +635,8 @@ func Test_OptionSet()
 
   " Cleanup
   au! OptionSet
-  for opt in ['nu', 'ai', 'acd', 'ar', 'bs', 'backup', 'cul', 'cp']
+  " set tags&
+  for opt in ['nu', 'ai', 'acd', 'ar', 'bs', 'backup', 'cul', 'cp', 'tags']
     exe printf(":set %s&vim", opt)
   endfor
   call test_override('starting', 0)
@@ -810,7 +811,6 @@ endfunc
 " Test for autocommand that deletes the current buffer on BufLeave event.
 " Also test deleting the last buffer, should give a new, empty buffer.
 func Test_BufLeave_Wipe()
-  throw 'skipped: TODO: '
   %bwipe!
   let content = ['start of test file Xxx',
 	      \ 'this is a test',
@@ -1670,6 +1670,25 @@ func Test_ReadWrite_Autocmds()
   call delete('Xtestfile.gz')
   call delete('Xtest.c')
   call delete('test.out')
+endfunc
+
+func Test_throw_in_BufWritePre()
+  new
+  call setline(1, ['one', 'two', 'three'])
+  call assert_false(filereadable('Xthefile'))
+  augroup throwing
+    au BufWritePre X* throw 'do not write'
+  augroup END
+  try
+    w Xthefile
+  catch
+    let caught = 1
+  endtry
+  call assert_equal(1, caught)
+  call assert_false(filereadable('Xthefile'))
+
+  bwipe!
+  au! throwing
 endfunc
 
 func Test_FileChangedShell_reload()

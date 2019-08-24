@@ -863,7 +863,7 @@ qf_init_ext(
   fields.errmsg = xmalloc(fields.errmsglen);
   fields.pattern = xmalloc(CMDBUFFSIZE + 1);
 
-  if (efile != NULL && (state.fd = mch_fopen((char *)efile, "r")) == NULL) {
+  if (efile != NULL && (state.fd = os_fopen((char *)efile, "r")) == NULL) {
     EMSG2(_(e_openerrf), efile);
     goto qf_init_end;
   }
@@ -1326,7 +1326,7 @@ static int qf_parse_multiline_pfx(qf_info_T *qi, int qf_idx, int idx,
     if (qfprev == NULL) {
       return QF_FAIL;
     }
-    if (*fields->errmsg && !qfl->qf_multiignore) {
+    if (*fields->errmsg) {
       size_t textlen = strlen((char *)qfprev->qf_text);
       size_t errlen  = strlen((char *)fields->errmsg);
       qfprev->qf_text = xrealloc(qfprev->qf_text, textlen + errlen + 2);
@@ -2056,7 +2056,7 @@ static int qf_jump_to_usable_window(int qf_fnum, int *opened_window)
   win_T       *usable_win_ptr = NULL;
   int         usable_win;
   int         flags;
-  win_T       *win = NULL;
+  win_T       *win;
   win_T       *altwin;
 
   usable_win = 0;
@@ -2079,7 +2079,6 @@ static int qf_jump_to_usable_window(int qf_fnum, int *opened_window)
     // Locate a window showing a normal buffer
     FOR_ALL_WINDOWS_IN_TAB(win2, curtab) {
       if (win2->w_buffer->b_p_bt[0] == NUL) {
-        win = win2;
         usable_win = 1;
         break;
       }
@@ -2204,7 +2203,7 @@ static int qf_jump_edit_buffer(qf_info_T *qi, qfline_T *qf_ptr, int forceit,
     // Open help file (do_ecmd() will set b_help flag, readfile() will
     // set b_p_ro flag).
     if (!can_abandon(curbuf, forceit)) {
-      EMSG(_(e_nowrtmsg));
+      no_write_message();
       retval = false;
     } else {
       retval = do_ecmd(qf_ptr->qf_fnum, NULL, NULL, NULL, (linenr_T)1,
@@ -2212,7 +2211,6 @@ static int qf_jump_edit_buffer(qf_info_T *qi, qfline_T *qf_ptr, int forceit,
                        oldwin == curwin ? curwin : NULL);
     }
   } else {
-    int old_qf_curlist = qi->qf_curlist;
     unsigned save_qfid = qi->qf_lists[qi->qf_curlist].qf_id;
 
     retval = buflist_getfile(qf_ptr->qf_fnum, (linenr_T)1,
@@ -2229,8 +2227,7 @@ static int qf_jump_edit_buffer(qf_info_T *qi, qfline_T *qf_ptr, int forceit,
         EMSG(_(e_loc_list_changed));
         *abort = true;
       }
-    } else if (old_qf_curlist != qi->qf_curlist
-               || !is_qf_entry_present(qi, qf_ptr)) {
+    } else if (!is_qf_entry_present(qi, qf_ptr)) {
       if (IS_QF_STACK(qi)) {
         EMSG(_("E925: Current quickfix was changed"));
       } else {
@@ -2528,9 +2525,9 @@ void qf_list(exarg_T *eap)
   qfp = qi->qf_lists[qi->qf_curlist].qf_start;
   for (i = 1; !got_int && i <= qi->qf_lists[qi->qf_curlist].qf_count; ) {
     if ((qfp->qf_valid || all) && idx1 <= i && i <= idx2) {
-      msg_putchar('\n');
-      if (got_int)
+      if (got_int) {
         break;
+      }
 
       fname = NULL;
       if (qfp->qf_module != NULL && *qfp->qf_module != NUL) {
@@ -2549,6 +2546,27 @@ void qf_list(exarg_T *eap)
           vim_snprintf((char *)IObuff, IOSIZE, "%2d %s", i, (char *)fname);
         }
       }
+
+      // Support for filtering entries using :filter /pat/ clist
+      // Match against the module name, file name, search pattern and
+      // text of the entry.
+      bool filter_entry = true;
+      if (qfp->qf_module != NULL && *qfp->qf_module != NUL) {
+        filter_entry &= message_filtered(qfp->qf_module);
+      }
+      if (filter_entry && fname != NULL) {
+        filter_entry &= message_filtered(fname);
+      }
+      if (filter_entry && qfp->qf_pattern != NULL) {
+        filter_entry &= message_filtered(qfp->qf_pattern);
+      }
+      if (filter_entry) {
+        filter_entry &= message_filtered(qfp->qf_text);
+      }
+      if (filter_entry) {
+        goto next_entry;
+      }
+      msg_putchar('\n');
       msg_outtrans_attr(IObuff, i == qi->qf_lists[qi->qf_curlist].qf_index
                         ? HL_ATTR(HLF_QFL) : HL_ATTR(HLF_D));
       if (qfp->qf_lnum == 0) {
@@ -2579,6 +2597,7 @@ void qf_list(exarg_T *eap)
       ui_flush();                      /* show one line at a time */
     }
 
+next_entry:
     qfp = qfp->qf_next;
     if (qfp == NULL) {
       break;
@@ -2632,7 +2651,7 @@ static void qf_msg(qf_info_T *qi, int which, char *lead)
     }
     xstrlcat((char *)buf, title, IOSIZE);
   }
-  trunc_string(buf, buf, (int)Columns - 1, IOSIZE);
+  trunc_string(buf, buf, Columns - 1, IOSIZE);
   msg(buf);
 }
 
@@ -2843,6 +2862,39 @@ static char_u *qf_types(int c, int nr)
 
   sprintf((char *)buf, "%s %3d", (char *)p, nr);
   return buf;
+}
+
+// When "split" is false: Open the entry/result under the cursor.
+// When "split" is true: Open the entry/result under the cursor in a new window.
+void qf_view_result(bool split)
+{
+  qf_info_T   *qi = &ql_info;
+
+  if (!bt_quickfix(curbuf)) {
+    return;
+  }
+  if (IS_LL_WINDOW(curwin)) {
+    qi = GET_LOC_LIST(curwin);
+  }
+  if (qi == NULL
+      || qi->qf_lists[qi->qf_curlist].qf_count == 0) {
+    EMSG(_(e_quickfix));
+    return;
+  }
+
+  if (split) {
+    char cmd[32];
+
+    snprintf(cmd, sizeof(cmd), "split +%" PRId64 "%s",
+             (int64_t)curwin->w_cursor.lnum,
+             IS_LL_WINDOW(curwin) ? "ll" : "cc");
+    if (do_cmdline_cmd(cmd) == OK) {
+      do_cmdline_cmd("clearjumps");
+    }
+    return;
+  }
+
+  do_cmdline_cmd((IS_LL_WINDOW(curwin) ? ".ll" : ".cc"));
 }
 
 /*
@@ -4688,11 +4740,8 @@ static int qf_getprop_defaults(qf_info_T *qi, int flags, dict_T *retdict)
 /// Return the quickfix list title as 'title' in retdict
 static int qf_getprop_title(qf_info_T *qi, int qf_idx, dict_T *retdict)
 {
-    char_u *t = qi->qf_lists[qf_idx].qf_title;
-    if (t == NULL) {
-      t = (char_u *)"";
-    }
-    return tv_dict_add_str(retdict, S_LEN("title"), (const char *)t);
+    return tv_dict_add_str(retdict, S_LEN("title"),
+                           (const char *)qi->qf_lists[qf_idx].qf_title);
 }
 
 /// Return the quickfix list items/entries as 'items' in retdict
@@ -5335,8 +5384,11 @@ void ex_cexpr(exarg_T *eap)
         apply_autocmds(EVENT_QUICKFIXCMDPOST, (char_u *)au_name,
                        curbuf->b_fname, true, curbuf);
       }
-      if (res > 0 && (eap->cmdidx == CMD_cexpr || eap->cmdidx == CMD_lexpr)) {
-        qf_jump(qi, 0, 0, eap->forceit);  // display first error
+      if (res > 0
+          && (eap->cmdidx == CMD_cexpr || eap->cmdidx == CMD_lexpr)
+          && qi == GET_LOC_LIST(curwin)) {
+        // Jump to the first error if autocmds didn't free the list.
+        qf_jump(qi, 0, 0, eap->forceit);
       }
     } else {
       EMSG(_("E777: String or List expected"));
@@ -5440,7 +5492,7 @@ void ex_helpgrep(exarg_T *eap)
                                + STRLEN(fnames[fi]) - 3, 3) == 0)) {
             continue;
           }
-          fd = mch_fopen((char *)fnames[fi], "r");
+          fd = os_fopen((char *)fnames[fi], "r");
           if (fd != NULL) {
             lnum = 1;
             while (!vim_fgets(IObuff, IOSIZE, fd) && !got_int) {

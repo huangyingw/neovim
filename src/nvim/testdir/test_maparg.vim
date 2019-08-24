@@ -1,8 +1,5 @@
 " Tests for maparg().
 " Also test utf8 map with a 0x80 byte.
-if !has("multi_byte")
-  finish
-endif
 
 function s:SID()     
   return str2nr(matchstr(expand('<sfile>'), '<SNR>\zs\d\+\ze_SID$'))
@@ -27,6 +24,10 @@ function Test_maparg()
   call assert_equal({'silent': 0, 'noremap': 0, 'lhs': 'foo', 'mode': ' ',
         \ 'nowait': 1, 'expr': 0, 'sid': sid, 'rhs': 'bar', 'buffer': 1},
         \ maparg('foo', '', 0, 1))
+  tmap baz foo
+  call assert_equal({'silent': 0, 'noremap': 0, 'lhs': 'baz', 'mode': 't',
+        \ 'nowait': 0, 'expr': 0, 'sid': sid, 'rhs': 'foo', 'buffer': 0},
+        \ maparg('baz', 't', 0, 1))
 
   map abc x<char-114>x
   call assert_equal("xrx", maparg('abc'))

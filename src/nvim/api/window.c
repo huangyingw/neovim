@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <limits.h>
 
+#include "nvim/ascii.h"
+#include "nvim/globals.h"
 #include "nvim/api/window.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
@@ -13,10 +15,10 @@
 #include "nvim/vim.h"
 #include "nvim/buffer.h"
 #include "nvim/cursor.h"
+#include "nvim/option.h"
 #include "nvim/window.h"
 #include "nvim/screen.h"
 #include "nvim/move.h"
-
 
 /// Gets the current buffer in a window
 ///
@@ -475,6 +477,10 @@ void nvim_win_set_config(Window window, Dictionary config, Error *err)
     win_config_float(win, fconfig);
     win->w_pos_changed = true;
   }
+  if (fconfig.style == kWinStyleMinimal) {
+    win_set_minimal_style(win);
+    didset_window_options(win);
+  }
 }
 
 /// Return window configuration.
@@ -521,9 +527,7 @@ Dictionary nvim_win_get_config(Window window, Error *err)
   return rv;
 }
 
-/// Close a window.
-///
-/// This is equivalent to |:close| with count except that it takes a window id.
+/// Closes the window (like |:close| with a |window-ID|).
 ///
 /// @param window   Window handle
 /// @param force    Behave like `:close!` The last window of a buffer with
@@ -537,8 +541,17 @@ void nvim_win_close(Window window, Boolean force, Error *err)
   if (!win) {
     return;
   }
-  tabpage_T *tabpage = win_find_tabpage(win);
 
+  if (cmdwin_type != 0) {
+    if (win == curwin) {
+      cmdwin_result = Ctrl_C;
+    } else {
+      api_set_error(err, kErrorTypeException, "%s", _(e_cmdwin));
+    }
+    return;
+  }
+
+  tabpage_T *tabpage = win_find_tabpage(win);
   TryState tstate;
   try_enter(&tstate);
   ex_win_close(force, win, tabpage == curtab ? NULL : tabpage);

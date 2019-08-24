@@ -1,9 +1,5 @@
 " Tests for mappings and abbreviations
 
-if !has('multi_byte')
-  finish
-endif
-
 source shared.vim
 
 func Test_abbreviation()
@@ -187,9 +183,32 @@ func Test_map_cursor()
   imapclear
 endfunc
 
+func Test_map_cursor_ctrl_gU()
+  " <c-g>U<cursor> works only within a single line
+  nnoremap c<* *Ncgn<C-r>"<C-G>U<S-Left>
+  call setline(1, ['foo', 'foobar', '', 'foo'])
+  call cursor(1,2)
+  call feedkeys("c<*PREFIX\<esc>.", 'xt')
+  call assert_equal(['PREFIXfoo', 'foobar', '', 'PREFIXfoo'], getline(1,'$'))
+  " break undo manually
+  set ul=1000
+  exe ":norm! uu"
+  call assert_equal(['foo', 'foobar', '', 'foo'], getline(1,'$'))
+
+  " Test that it does not work if the cursor moves to the previous line
+  " 2 times <S-Left> move to the previous line
+  nnoremap c<* *Ncgn<C-r>"<C-G>U<S-Left><C-G>U<S-Left>
+  call setline(1, ['', ' foo', 'foobar', '', 'foo'])
+  call cursor(2,3)
+  call feedkeys("c<*PREFIX\<esc>.", 'xt')
+  call assert_equal(['PREFIXPREFIX', ' foo', 'foobar', '', 'foo'], getline(1,'$'))
+  nmapclear
+endfunc
+
+
 " This isn't actually testing a mapping, but similar use of CTRL-G U as above.
 func Test_break_undo()
-  :set whichwrap=<,>,[,]
+  set whichwrap=<,>,[,]
   call feedkeys("G4o2k", "xt")
   exe ":norm! iTest3: text with a (parenthesis here\<C-G>U\<Right>new line here\<esc>\<up>\<up>."
   call assert_equal('new line here', getline(line('$') - 3))
@@ -204,6 +223,12 @@ func Test_map_meta_quotes()
   call assert_equal("-foo-", getline('$'))
   set nomodified
   iunmap <M-">
+endfunc
+
+func Test_map_meta_multibyte()
+  imap <M-á> foo
+  call assert_match('i  <M-á>\s*foo', execute('imap'))
+  iunmap <M-á>
 endfunc
 
 func Test_abbr_after_line_join()
@@ -259,7 +284,7 @@ func Test_map_timeout_with_timer_interrupt()
   let g:val = 0
   nnoremap \12 :let g:val = 1<CR>
   nnoremap \123 :let g:val = 2<CR>
-  set timeout timeoutlen=1000
+  set timeout timeoutlen=200
 
   func ExitCb(job, status)
     let g:timer = timer_start(1, {_ -> feedkeys("3\<Esc>", 't')})

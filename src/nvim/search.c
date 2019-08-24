@@ -352,7 +352,7 @@ int ignorecase_opt(char_u *pat, int ic_in, int scs)
 {
   int ic = ic_in;
   if (ic && !no_smartcase && scs
-      && !(ctrl_x_mode && curbuf->b_p_inf)
+      && !(ctrl_x_mode_not_default() && curbuf->b_p_inf)
       ) {
     ic = !pat_has_uppercase(pat);
   }
@@ -864,13 +864,11 @@ int searchit(
       }
       at_first_line = FALSE;
 
-      /*
-       * Stop the search if wrapscan isn't set, "stop_lnum" is
-       * specified, after an interrupt, after a match and after looping
-       * twice.
-       */
+      // Stop the search if wrapscan isn't set, "stop_lnum" is
+      // specified, after an interrupt, after a match and after looping
+      // twice.
       if (!p_ws || stop_lnum != 0 || got_int || called_emsg
-          || (timed_out != NULL && timed_out)
+          || (timed_out != NULL && *timed_out)
           || break_loop
           || found || loop) {
         break;
@@ -1132,14 +1130,14 @@ int do_search(
         && !cmd_silent && msg_silent == 0) {
       char_u      *trunc;
       char_u      off_buf[40];
-      int         off_len = 0;
+      size_t      off_len = 0;
 
       // Compute msg_row early.
       msg_start();
 
       // Get the offset, so we know how long it is.
       if (spats[0].off.line || spats[0].off.end || spats[0].off.off) {
-        p = off_buf;
+        p = off_buf;  // -V507
         *p++ = dirc;
         if (spats[0].off.end) {
           *p++ = 'e';
@@ -1168,12 +1166,14 @@ int do_search(
         // search stat.  Use all the space available, so that the
         // search state is right aligned.  If there is not enough space
         // msg_strtrunc() will shorten in the middle.
-        if (msg_scrolled != 0) {
+        if (ui_has(kUIMessages)) {
+          len = 0;  // adjusted below
+        } else if (msg_scrolled != 0) {
           // Use all the columns.
-          len = (int)(Rows - msg_row) * Columns - 1;
+          len = (Rows - msg_row) * Columns - 1;
         } else {
           // Use up to 'showcmd' column.
-          len = (int)(Rows - msg_row - 1) * Columns + sc_col - 1;
+          len = (Rows - msg_row - 1) * Columns + sc_col - 1;
         }
         if (len < STRLEN(p) + off_len + SEARCH_STAT_BUF_LEN + 3) {
           len = STRLEN(p) + off_len + SEARCH_STAT_BUF_LEN + 3;
@@ -1183,7 +1183,7 @@ int do_search(
         len = STRLEN(p) + off_len + 3;
       }
 
-      msgbuf = xmalloc((int)len);
+      msgbuf = xmalloc(len);
       {
         memset(msgbuf, ' ', len);
         msgbuf[0] = dirc;
@@ -1215,7 +1215,7 @@ int do_search(
           xfree(msgbuf);
           msgbuf = r;
           // move reversed text to beginning of buffer
-          while (*r != NUL && *r == ' ') {
+          while (*r == ' ') {
             r++;
           }
           size_t pat_len = msgbuf + STRLEN(msgbuf) - r;
@@ -3368,7 +3368,6 @@ current_tagblock(
 )
 {
   long count = count_arg;
-  long n;
   pos_T old_pos;
   pos_T start_pos;
   pos_T end_pos;
@@ -3377,7 +3376,6 @@ current_tagblock(
   char_u      *p;
   char_u      *cp;
   int len;
-  int r;
   bool do_include = include;
   bool save_p_ws = p_ws;
   int retval = FAIL;
@@ -3426,12 +3424,12 @@ again:
    * Search backwards for unclosed "<aaa>".
    * Put this position in start_pos.
    */
-  for (n = 0; n < count; ++n) {
-    if (do_searchpair((char_u *)
-            "<[^ \t>/!]\\+\\%(\\_s\\_[^>]\\{-}[^/]>\\|$\\|\\_s\\=>\\)",
-            (char_u *)"",
-            (char_u *)"</[^>]*>", BACKWARD, (char_u *)"", 0,
-            NULL, (linenr_T)0, 0L) <= 0) {
+  for (long n = 0; n < count; n++) {
+    if (do_searchpair(
+        (char_u *)"<[^ \t>/!]\\+\\%(\\_s\\_[^>]\\{-}[^/]>\\|$\\|\\_s\\=>\\)",
+        (char_u *)"",
+        (char_u *)"</[^>]*>", BACKWARD, NULL, 0,
+        NULL, (linenr_T)0, 0L) <= 0) {
       curwin->w_cursor = old_pos;
       goto theend;
     }
@@ -3457,8 +3455,8 @@ again:
   sprintf((char *)spat, "<%.*s\\>\\%%(\\s\\_[^>]\\{-}[^/]>\\|>\\)\\c", len, p);
   sprintf((char *)epat, "</%.*s>\\c", len, p);
 
-  r = do_searchpair(spat, (char_u *)"", epat, FORWARD, (char_u *)"",
-      0, NULL, (linenr_T)0, 0L);
+  const int r = do_searchpair(spat, (char_u *)"", epat, FORWARD, NULL,
+                              0, NULL, (linenr_T)0, 0L);
 
   xfree(spat);
   xfree(epat);
@@ -4244,6 +4242,7 @@ static void search_stat(int dirc, pos_T *pos,
     // STRNICMP ignores case, but we should not ignore case.
     // Unfortunately, there is no STRNICMP function.
     if (!(chgtick == buf_get_changedtick(curbuf)
+          && lastpat != NULL  // supress clang/NULL passed as nonnull parameter
           && STRNICMP(lastpat, spats[last_idx].pat, STRLEN(lastpat)) == 0
           && STRLEN(lastpat) == STRLEN(spats[last_idx].pat)
           && equalpos(lastpos, curwin->w_cursor)
@@ -4328,6 +4327,7 @@ static void search_stat(int dirc, pos_T *pos,
 
       // keep the message even after redraw, but don't put in history
       msg_hist_off = true;
+      msg_ext_set_kind("search_count");
       give_warning(msgbuf, false);
       msg_hist_off = false;
     }
@@ -4343,8 +4343,8 @@ find_pattern_in_path(
     char_u *ptr,            // pointer to search pattern
     int dir,                // direction of expansion
     size_t len,             // length of search pattern
-    int whole,              // match whole words only
-    int skip_comments,      // don't match inside comments
+    bool whole,             // match whole words only
+    bool skip_comments,     // don't match inside comments
     int type,               // Type of search; are we looking for a type?
                             // a macro?
     long count,
@@ -4574,10 +4574,9 @@ find_pattern_in_path(
           xfree(files);
           files = bigger;
         }
-        if ((files[depth + 1].fp = mch_fopen((char *)new_fname, "r"))
-            == NULL)
+        if ((files[depth + 1].fp = os_fopen((char *)new_fname, "r")) == NULL) {
           xfree(new_fname);
-        else {
+        } else {
           if (++depth == old_files) {
             // Something wrong. We will forget one of our already visited files
             // now.
@@ -4684,8 +4683,7 @@ search_line:
     }
     if (matched) {
       if (action == ACTION_EXPAND) {
-        int reuse = 0;
-        int add_r;
+        bool cont_s_ipos = false;
         char_u  *aux;
 
         if (depth == -1 && lnum == curwin->w_cursor.lnum)
@@ -4739,7 +4737,7 @@ search_line:
               p = aux + IOSIZE - i - 1;
             STRNCPY(IObuff + i, aux, p - aux);
             i += (int)(p - aux);
-            reuse |= CONT_S_IPOS;
+            cont_s_ipos = true;
           }
           IObuff[i] = NUL;
           aux = IObuff;
@@ -4748,14 +4746,15 @@ search_line:
             goto exit_matched;
         }
 
-        add_r = ins_compl_add_infercase(aux, i, p_ic,
-            curr_fname == curbuf->b_fname ? NULL : curr_fname,
-            dir, reuse);
-        if (add_r == OK)
-          /* if dir was BACKWARD then honor it just once */
+        const int add_r = ins_compl_add_infercase(
+            aux, i, p_ic, curr_fname == curbuf->b_fname ? NULL : curr_fname,
+            dir, cont_s_ipos);
+        if (add_r == OK) {
+          // if dir was BACKWARD then honor it just once
           dir = FORWARD;
-        else if (add_r == FAIL)
+        } else if (add_r == FAIL) {
           break;
+        }
       } else if (action == ACTION_SHOW_ALL) {
         found = TRUE;
         if (!did_show)

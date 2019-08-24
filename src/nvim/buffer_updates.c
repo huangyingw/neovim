@@ -26,6 +26,9 @@ bool buf_updates_register(buf_T *buf, uint64_t channel_id,
 
   if (channel_id == LUA_INTERNAL_CALL) {
     kv_push(buf->update_callbacks, cb);
+    if (cb.utf_sizes) {
+      buf->update_need_codepoints = true;
+    }
     return true;
   }
 
@@ -143,7 +146,21 @@ void buf_updates_unregister_all(buf_T *buf)
   }
 
   for (size_t i = 0; i < kv_size(buf->update_callbacks); i++) {
-    free_update_callbacks(kv_A(buf->update_callbacks, i));
+    BufUpdateCallbacks cb = kv_A(buf->update_callbacks, i);
+    if (cb.on_detach != LUA_NOREF) {
+      Array args = ARRAY_DICT_INIT;
+      Object items[1];
+      args.size = 1;
+      args.items = items;
+
+      // the first argument is always the buffer handle
+      args.items[0] = BUFFER_OBJ(buf->handle);
+
+      textlock++;
+      executor_exec_lua_cb(cb.on_detach, "detach", args, false);
+      textlock--;
+    }
+    free_update_callbacks(cb);
   }
   kv_destroy(buf->update_callbacks);
   kv_init(buf->update_callbacks);
@@ -155,6 +172,10 @@ void buf_updates_send_changes(buf_T *buf,
                               int64_t num_removed,
                               bool send_tick)
 {
+  size_t deleted_codepoints, deleted_codeunits;
+  size_t deleted_bytes = ml_flush_deleted_bytes(buf, &deleted_codepoints,
+                                                &deleted_codeunits);
+
   if (!buf_updates_active(buf)) {
     return;
   }
@@ -217,8 +238,8 @@ void buf_updates_send_changes(buf_T *buf,
     bool keep = true;
     if (cb.on_lines != LUA_NOREF) {
       Array args = ARRAY_DICT_INIT;
-      Object items[5];
-      args.size = 5;
+      Object items[8];
+      args.size = 6;  // may be increased to 8 below
       args.items = items;
 
       // the first argument is always the buffer handle
@@ -236,14 +257,22 @@ void buf_updates_send_changes(buf_T *buf,
       // the last line in the updated range
       args.items[4] = INTEGER_OBJ(firstline - 1 + num_added);
 
+      // byte count of previous contents
+      args.items[5] = INTEGER_OBJ((Integer)deleted_bytes);
+      if (cb.utf_sizes) {
+        args.size = 8;
+        args.items[6] = INTEGER_OBJ((Integer)deleted_codepoints);
+        args.items[7] = INTEGER_OBJ((Integer)deleted_codeunits);
+      }
       textlock++;
-      Object res = executor_exec_lua_cb(cb.on_lines, "lines", args);
+      Object res = executor_exec_lua_cb(cb.on_lines, "lines", args, true);
       textlock--;
 
       if (res.type == kObjectTypeBoolean && res.data.boolean == true) {
         free_update_callbacks(cb);
         keep = false;
       }
+      api_free_object(res);
     }
     if (keep) {
       kv_A(buf->update_callbacks, j++) = kv_A(buf->update_callbacks, i);
@@ -276,13 +305,15 @@ void buf_updates_changedtick(buf_T *buf)
       args.items[1] = INTEGER_OBJ(buf_get_changedtick(buf));
 
       textlock++;
-      Object res = executor_exec_lua_cb(cb.on_changedtick, "changedtick", args);
+      Object res = executor_exec_lua_cb(cb.on_changedtick, "changedtick",
+                                        args, true);
       textlock--;
 
       if (res.type == kObjectTypeBoolean && res.data.boolean == true) {
         free_update_callbacks(cb);
         keep = false;
       }
+      api_free_object(res);
     }
     if (keep) {
       kv_A(buf->update_callbacks, j++) = kv_A(buf->update_callbacks, i);

@@ -1,6 +1,6 @@
 function(get_compile_flags _compile_flags)
   # Create template akin to CMAKE_C_COMPILE_OBJECT.
-  set(compile_flags "<CMAKE_C_COMPILER> <CFLAGS> <BUILD_TYPE_CFLAGS> <DEFINITIONS> <INCLUDES>")
+  set(compile_flags "<CMAKE_C_COMPILER> <CFLAGS> <BUILD_TYPE_CFLAGS> <COMPILE_OPTIONS><COMPILE_DEFINITIONS> <INCLUDES>")
 
   # Get C compiler.
   string(REPLACE
@@ -9,13 +9,40 @@ function(get_compile_flags _compile_flags)
     compile_flags
     "${compile_flags}")
 
-  # Get flags set by add_definition().
-  get_directory_property(definitions
+  # Get flags set by add_definitions().
+  get_directory_property(compile_definitions
     DIRECTORY "src/nvim"
-    DEFINITIONS)
+    COMPILE_DEFINITIONS)
+  get_target_property(compile_definitions_target nvim COMPILE_DEFINITIONS)
+  if(compile_definitions_target)
+    list(APPEND compile_definitions ${compile_definitions_target})
+    list(REMOVE_DUPLICATES compile_definitions)
+  endif()
+  # NOTE: list(JOIN) requires CMake 3.12, string(CONCAT) requires CMake 3.
+  string(REPLACE ";" " -D" compile_definitions "${compile_definitions}")
+  if(compile_definitions)
+    set(compile_definitions " -D${compile_definitions}")
+  endif()
   string(REPLACE
-    "<DEFINITIONS>"
-    "${definitions}"
+    "<COMPILE_DEFINITIONS>"
+    "${compile_definitions}"
+    compile_flags
+    "${compile_flags}")
+
+  # Get flags set by add_compile_options().
+  get_directory_property(compile_options
+    DIRECTORY "src/nvim"
+    COMPILE_OPTIONS)
+  get_target_property(compile_options_target nvim COMPILE_OPTIONS)
+  if(compile_options_target)
+    list(APPEND compile_options ${compile_options_target})
+    list(REMOVE_DUPLICATES compile_options)
+  endif()
+  # NOTE: list(JOIN) requires CMake 3.12.
+  string(REPLACE ";" " " compile_options "${compile_options}")
+  string(REPLACE
+    "<COMPILE_OPTIONS>"
+    "${compile_options}"
     compile_flags
     "${compile_flags}")
 

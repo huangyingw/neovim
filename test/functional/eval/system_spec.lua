@@ -203,12 +203,15 @@ describe('system()', function()
     end)
 
     it('prints verbose information', function()
+      nvim('set_option', 'shell', 'fake_shell')
+      nvim('set_option', 'shellcmdflag', 'cmdflag')
+
       screen:try_resize(72, 14)
       feed(':4verbose echo system("echo hi")<cr>')
       if iswin() then
-        screen:expect{any=[[Executing command: "'cmd.exe' '/s' '/c' '"echo hi"'"]]}
+        screen:expect{any=[[Executing command: "'fake_shell' 'cmdflag' '"echo hi"'"]]}
       else
-        screen:expect{any=[[Executing command: "'/[^']*sh' '%-c' 'echo hi'"]]}
+        screen:expect{any=[[Executing command: "'fake_shell' 'cmdflag' 'echo hi'"]]}
       end
       feed('<cr>')
     end)
@@ -272,7 +275,7 @@ describe('system()', function()
         ~                                                    |
         ~                                                    |
         ~                                                    |
-        Type  :qa!  and press <E...all changes and exit Nvim |
+        Type  :qa  and press <Enter> to exit Nvim            |
       ]])
     end)
   end)
@@ -478,7 +481,7 @@ describe('systemlist()', function()
         ~                                                    |
         ~                                                    |
         ~                                                    |
-        Type  :qa!  and press <E...all changes and exit Nvim |
+        Type  :qa  and press <Enter> to exit Nvim            |
       ]])
     end)
   end)

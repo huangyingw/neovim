@@ -2,15 +2,9 @@
 #   intro: https://codingnest.com/basic-cmake/
 #   best practices (3.0+): https://gist.github.com/mbinna/c61dbb39bca0e4fb7d1f73b0d66a4fd1
 
+# Version should match the tested CMAKE_URL in .travis.yml.
 cmake_minimum_required(VERSION 2.8.12)
 project(nvim C)
-
-if(POLICY CMP0059)
-  # Needed for use of DEFINITIONS variable, which is used to collect the
-  # compilation flags for reporting in "nvim --version"
-  # https://github.com/neovim/neovim/pull/8558#issuecomment-398033140
-  cmake_policy(SET CMP0059 OLD)
-endif()
 
 # Point CMake at any custom modules we may ship
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
@@ -256,7 +250,7 @@ check_c_source_compiles("
 int main(void)
 {
   void *trace[1];
-  int trace_size = backtrace(trace, 1);
+  backtrace(trace, 1);
   return 0;
 }
 " HAVE_EXECINFO_BACKTRACE)
@@ -264,7 +258,7 @@ int main(void)
 check_c_source_compiles("
 int main(void)
 {
-  int a;
+  int a = 42;
   __builtin_add_overflow(a, a, &a);
   __builtin_sub_overflow(a, a, &a);
   return 0;
@@ -273,22 +267,23 @@ int main(void)
 
 if(MSVC)
   # XXX: /W4 gives too many warnings. #3241
-  add_definitions(/W3 -D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE)
+  add_compile_options(/W3)
+  add_definitions(-D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE)
   add_definitions(-DWIN32)
 else()
-  add_definitions(-Wall -Wextra -pedantic -Wno-unused-parameter
+  add_compile_options(-Wall -Wextra -pedantic -Wno-unused-parameter
     -Wstrict-prototypes -std=gnu99 -Wshadow -Wconversion
     -Wmissing-prototypes)
 
   check_c_compiler_flag(-Wimplicit-fallthrough HAS_WIMPLICIT_FALLTHROUGH_FLAG)
   if(HAS_WIMPLICIT_FALLTHROUGH_FLAG)
-    add_definitions(-Wimplicit-fallthrough)
+    add_compile_options(-Wimplicit-fallthrough)
   endif()
 
   # On FreeBSD 64 math.h uses unguarded C11 extension, which taints clang
   # 3.4.1 used there.
   if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" AND CMAKE_C_COMPILER_ID MATCHES "Clang")
-    add_definitions(-Wno-c11-extensions)
+    add_compile_options(-Wno-c11-extensions)
   endif()
 endif()
 
@@ -304,7 +299,7 @@ endif()
 # OpenBSD's GCC (4.2.1) doesn't have -Wvla
 check_c_compiler_flag(-Wvla HAS_WVLA_FLAG)
 if(HAS_WVLA_FLAG)
-  add_definitions(-Wvla)
+  add_compile_options(-Wvla)
 endif()
 
 if(UNIX)
@@ -313,26 +308,18 @@ if(UNIX)
   check_c_compiler_flag(-fstack-protector HAS_FSTACK_PROTECTOR_FLAG)
 
   if(HAS_FSTACK_PROTECTOR_STRONG_FLAG)
-    add_definitions(-fstack-protector-strong)
+    add_compile_options(-fstack-protector-strong)
   elseif(HAS_FSTACK_PROTECTOR_FLAG)
-    add_definitions(-fstack-protector --param ssp-buffer-size=4)
+    add_compile_options(-fstack-protector --param ssp-buffer-size=4)
   endif()
 endif()
 
 check_c_compiler_flag(-fdiagnostics-color=auto HAS_DIAG_COLOR_FLAG)
 if(HAS_DIAG_COLOR_FLAG)
-  add_definitions(-fdiagnostics-color=auto)
-endif()
-
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-  # 1. Array-bounds testing is broken in some GCC versions before 4.8.5.
-  #    https://gcc.gnu.org/bugzilla/show_bug.cgi?id=56273
-  # 2. But _Pragma("...ignored") is broken (unresolved) in GCC 5+:
-  #    https://gcc.gnu.org/bugzilla/show_bug.cgi?id=66099
-  # So we must disable -Warray-bounds globally for GCC (for kbtree.h, #7083).
-  check_c_compiler_flag(-Wno-array-bounds HAS_NO_ARRAY_BOUNDS_FLAG)
-  if(HAS_NO_ARRAY_BOUNDS_FLAG)
-    add_definitions(-Wno-array-bounds)
+  if(CMAKE_GENERATOR MATCHES "Ninja")
+    add_compile_options(-fdiagnostics-color=always)
+  else()
+    add_compile_options(-fdiagnostics-color=auto)
   endif()
 endif()
 
@@ -340,10 +327,10 @@ option(TRAVIS_CI_BUILD "Travis/QuickBuild CI, extra flags will be set" OFF)
 
 if(TRAVIS_CI_BUILD)
   message(STATUS "Travis/QuickBuild CI build enabled")
-  add_definitions(-Werror)
+  add_compile_options(-Werror)
   if(DEFINED ENV{BUILD_32BIT})
     # Get some test coverage for unsigned char
-    add_definitions(-funsigned-char)
+    add_compile_options(-funsigned-char)
   endif()
 endif()
 
@@ -379,11 +366,14 @@ endif()
 include_directories("${PROJECT_BINARY_DIR}/config")
 include_directories("${PROJECT_SOURCE_DIR}/src")
 
-find_package(LibUV REQUIRED)  # minimum version: v1.12
+find_package(LibUV 1.28.0 REQUIRED)
 include_directories(SYSTEM ${LIBUV_INCLUDE_DIRS})
 
 find_package(Msgpack 1.0.0 REQUIRED)
 include_directories(SYSTEM ${MSGPACK_INCLUDE_DIRS})
+
+find_package(LibLUV 1.30.0 REQUIRED)
+include_directories(SYSTEM ${LIBLUV_INCLUDE_DIRS})
 
 # Note: The test lib requires LuaJIT; it will be skipped if LuaJIT is missing.
 option(PREFER_LUA "Prefer Lua over LuaJIT in the nvim executable." OFF)
@@ -410,7 +400,7 @@ main(void)
   return MSGPACK_OBJECT_FLOAT32;
 }
 " MSGPACK_HAS_FLOAT32)
-unset(CMAKE_REQUIRED_LIBRARIES)
+list(REMOVE_ITEM CMAKE_REQUIRED_INCLUDES "${MSGPACK_INCLUDE_DIRS}")
 if(MSGPACK_HAS_FLOAT32)
   add_definitions(-DNVIM_MSGPACK_HAS_FLOAT32)
 endif()
@@ -418,7 +408,7 @@ endif()
 option(FEAT_TUI "Enable the Terminal UI" ON)
 
 if(FEAT_TUI)
-  find_package(Unibilium REQUIRED)
+  find_package(Unibilium 2.0 REQUIRED)
   include_directories(SYSTEM ${UNIBILIUM_INCLUDE_DIRS})
 
   list(APPEND CMAKE_REQUIRED_INCLUDES "${UNIBILIUM_INCLUDE_DIRS}")
@@ -432,8 +422,8 @@ if(FEAT_TUI)
     return unibi_num_from_var(unibi_var_from_num(0));
   }
   " UNIBI_HAS_VAR_FROM)
-  unset(CMAKE_REQUIRED_INCLUDES)
-  unset(CMAKE_REQUIRED_LIBRARIES)
+  list(REMOVE_ITEM CMAKE_REQUIRED_INCLUDES "${UNIBILIUM_INCLUDE_DIRS}")
+  list(REMOVE_ITEM CMAKE_REQUIRED_LIBRARIES "${UNIBILIUM_LIBRARIES}")
   if(UNIBI_HAS_VAR_FROM)
     add_definitions(-DNVIM_UNIBI_HAS_VAR_FROM)
   endif()
@@ -526,6 +516,7 @@ if(NOT BUSTED_OUTPUT_TYPE)
 endif()
 
 find_program(LUACHECK_PRG luacheck)
+find_program(FLAKE8_PRG flake8)
 find_program(GPERF_PRG gperf)
 
 include(InstallHelpers)
@@ -599,7 +590,6 @@ if(BUSTED_PRG)
         -DTEST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/test
         -DBUILD_DIR=${CMAKE_BINARY_DIR}
         -DTEST_TYPE=unit
-        -DSYSTEM_NAME=${CMAKE_SYSTEM_NAME}
         -P ${PROJECT_SOURCE_DIR}/cmake/RunTests.cmake
       DEPENDS ${UNITTEST_PREREQS}
       ${TEST_TARGET_ARGS})
@@ -630,7 +620,6 @@ if(BUSTED_PRG)
       -DTEST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/test
       -DBUILD_DIR=${CMAKE_BINARY_DIR}
       -DTEST_TYPE=functional
-      -DSYSTEM_NAME=${CMAKE_SYSTEM_NAME}
       -P ${PROJECT_SOURCE_DIR}/cmake/RunTests.cmake
     DEPENDS ${FUNCTIONALTEST_PREREQS}
     ${TEST_TARGET_ARGS})
@@ -647,7 +636,6 @@ if(BUSTED_PRG)
       -DTEST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/test
       -DBUILD_DIR=${CMAKE_BINARY_DIR}
       -DTEST_TYPE=benchmark
-      -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}
       -P ${PROJECT_SOURCE_DIR}/cmake/RunTests.cmake
     DEPENDS ${BENCHMARK_PREREQS}
     ${TEST_TARGET_ARGS})
@@ -665,7 +653,6 @@ if(BUSTED_LUA_PRG)
       -DTEST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/test
       -DBUILD_DIR=${CMAKE_BINARY_DIR}
       -DTEST_TYPE=functional
-      -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}
       -P ${PROJECT_SOURCE_DIR}/cmake/RunTests.cmake
     DEPENDS ${FUNCTIONALTEST_PREREQS}
     ${TEST_TARGET_ARGS})
@@ -673,40 +660,12 @@ if(BUSTED_LUA_PRG)
 endif()
 
 if(LUACHECK_PRG)
-  add_custom_target(testlint
-    COMMAND ${CMAKE_COMMAND}
-      -DLUACHECK_PRG=${LUACHECK_PRG}
-      -DLUAFILES_DIR=${CMAKE_CURRENT_SOURCE_DIR}/test
-      -DIGNORE_PATTERN="*/preload.lua"
-      -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}
-      -P ${PROJECT_SOURCE_DIR}/cmake/RunLuacheck.cmake)
-
-  add_custom_target(
-    lintbuiltinlua
-    COMMAND
-      ${CMAKE_COMMAND}
-        -DLUACHECK_PRG=${LUACHECK_PRG}
-        -DLUAFILES_DIR=${CMAKE_CURRENT_SOURCE_DIR}/src/nvim/lua
-        -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}
-        -DREAD_GLOBALS=vim
-        -P ${PROJECT_SOURCE_DIR}/cmake/RunLuacheck.cmake
-  )
-  add_custom_target(
-    lintruntimelua
-    COMMAND
-      ${CMAKE_COMMAND}
-        -DLUACHECK_PRG=${LUACHECK_PRG}
-        -DLUAFILES_DIR=${CMAKE_CURRENT_SOURCE_DIR}/runtime/lua
-        -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}
-        -DREAD_GLOBALS=vim
-        -P ${PROJECT_SOURCE_DIR}/cmake/RunLuacheck.cmake
-  )
-  # TODO(ZyX-I): Run linter for all lua code in src
-  add_custom_target(
-    lualint
-    DEPENDS lintruntimelua
-    DEPENDS lintbuiltinlua
-  )
+  add_custom_target(lualint
+    COMMAND ${LUACHECK_PRG} -q runtime/ src/ test/
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+else()
+  add_custom_target(lualint false
+    COMMENT "lualint: LUACHECK_PRG not defined")
 endif()
 
 set(CPACK_PACKAGE_NAME "Neovim")

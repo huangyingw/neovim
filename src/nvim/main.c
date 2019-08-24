@@ -54,6 +54,7 @@
 #include "nvim/strings.h"
 #include "nvim/syntax.h"
 #include "nvim/ui.h"
+#include "nvim/ui_compositor.h"
 #include "nvim/version.h"
 #include "nvim/window.h"
 #include "nvim/shada.h"
@@ -141,15 +142,12 @@ static const char *err_extra_cmd =
 
 void event_init(void)
 {
+  log_init();
   loop_init(&main_loop, NULL);
   // early msgpack-rpc initialization
   msgpack_rpc_init_method_table();
   msgpack_rpc_helpers_init();
-  // Initialize input events
   input_init();
-  // Timer to wake the event loop if a timeout argument is passed to
-  // `event_poll`
-  // Signals
   signal_init();
   // finish mspgack-rpc initialization
   channel_init();
@@ -185,7 +183,6 @@ bool event_teardown(void)
 /// Needed for unit tests. Must be called after `time_init()`.
 void early_init(void)
 {
-  log_init();
   env_init();
   fs_init();
   handle_init();
@@ -222,6 +219,9 @@ void early_init(void)
   TIME_MSG("inits 1");
 
   set_lang_var();               // set v:lang and v:ctype
+
+  init_signs();
+  ui_comp_syn_init();
 }
 
 #ifdef MAKE_LIB
@@ -237,7 +237,7 @@ int main(int argc, char **argv)
   char **argv = xmalloc((size_t)argc * sizeof(char *));
   for (int i = 0; i < argc; i++) {
     char *buf = NULL;
-    utf16_to_utf8(argv_w[i], &buf);
+    utf16_to_utf8(argv_w[i], -1, &buf);
     assert(buf);
     argv[i] = buf;
   }
@@ -257,12 +257,13 @@ int main(int argc, char **argv)
 
   init_startuptime(&params);
 
+  event_init();
+
   early_init();
 
   // Check if we have an interactive window.
   check_and_set_isatty(&params);
 
-  event_init();
   // Process the command line arguments.  File names are put in the global
   // argument list "global_alist".
   command_line_scan(&params);
@@ -343,10 +344,8 @@ int main(int argc, char **argv)
     p_lpl = false;
   }
 
-  // give embedders a chance to set up nvim, by processing a request before
-  // startup. This allows an external UI to show messages and prompts from
-  // --cmd and buffer loading (e.g. swap files)
-  bool early_ui = false;
+  // Wait for UIs to set up Nvim or show early messages
+  // and prompts (--cmd, swapfile dialog, …).
   bool use_remote_ui = (embedded_mode && !headless_mode);
   bool use_builtin_ui = (!headless_mode && !embedded_mode && !silent_mode);
   if (use_remote_ui || use_builtin_ui) {
@@ -361,7 +360,6 @@ int main(int argc, char **argv)
     // prepare screen now, so external UIs can display messages
     starting = NO_BUFFERS;
     screenclear();
-    early_ui = true;
     TIME_MSG("initialized screen early for UI");
   }
 
@@ -398,8 +396,7 @@ int main(int argc, char **argv)
     mch_exit(0);
   }
 
-  // Set a few option defaults after reading vimrc files: 'title', 'icon',
-  // 'shellpipe', 'shellredir'.
+  // Set some option defaults after reading vimrc files.
   set_init_3();
   TIME_MSG("inits 3");
 
@@ -458,7 +455,7 @@ int main(int argc, char **argv)
 
   setmouse();  // may start using the mouse
 
-  if (exmode_active || early_ui) {
+  if (exmode_active || use_remote_ui || use_builtin_ui) {
     // Don't clear the screen when starting in Ex mode, or when a UI might have
     // displayed messages.
     redraw_later(VALID);
@@ -581,9 +578,7 @@ int main(int argc, char **argv)
 void getout(int exitval)
   FUNC_ATTR_NORETURN
 {
-  tabpage_T   *tp, *next_tp;
-
-  exiting = TRUE;
+  exiting = true;
 
   /* When running in Ex mode an error causes us to exit with a non-zero exit
    * code.  POSIX requires this, although it's not 100% clear from the
@@ -593,15 +588,17 @@ void getout(int exitval)
 
   set_vim_var_nr(VV_EXITING, exitval);
 
-  /* Position the cursor on the last screen line, below all the text */
-  ui_cursor_goto((int)Rows - 1, 0);
+  // Position the cursor on the last screen line, below all the text
+  ui_cursor_goto(Rows - 1, 0);
 
   /* Optionally print hashtable efficiency. */
   hash_debug_results();
 
   if (get_vim_var_nr(VV_DYING) <= 1) {
-    /* Trigger BufWinLeave for all windows, but only once per buffer. */
-    for (tp = first_tabpage; tp != NULL; tp = next_tp) {
+    const tabpage_T *next_tp;
+
+    // Trigger BufWinLeave for all windows, but only once per buffer.
+    for (const tabpage_T *tp = first_tabpage; tp != NULL; tp = next_tp) {
       next_tp = tp->tp_next;
       FOR_ALL_WINDOWS_IN_TAB(wp, tp) {
         if (wp->w_buffer == NULL) {
@@ -658,17 +655,14 @@ void getout(int exitval)
     wait_return(FALSE);
   }
 
-  /* Position the cursor again, the autocommands may have moved it */
-  ui_cursor_goto((int)Rows - 1, 0);
+  // Position the cursor again, the autocommands may have moved it
+  ui_cursor_goto(Rows - 1, 0);
 
   // Apply 'titleold'.
   if (p_title && *p_titleold != NUL) {
     ui_call_set_title(cstr_as_string((char *)p_titleold));
   }
 
-#if defined(USE_ICONV) && defined(DYNAMIC_ICONV)
-  iconv_end();
-#endif
   cs_end();
   if (garbage_collect_at_exit) {
     garbage_collect(false);
@@ -712,22 +706,14 @@ static void init_locale(void)
   setlocale(LC_NUMERIC, "C");
 # endif
 
-# ifdef LOCALE_INSTALL_DIR    // gnu/linux standard: $prefix/share/locale
-  bindtextdomain(PROJECT_NAME, LOCALE_INSTALL_DIR);
-# else                        // old vim style: $runtime/lang
-  {
-    char_u  *p;
-
-    // expand_env() doesn't work yet, because g_chartab[] is not
-    // initialized yet, call vim_getenv() directly
-    p = (char_u *)vim_getenv("VIMRUNTIME");
-    if (p != NULL && *p != NUL) {
-      vim_snprintf((char *)NameBuff, MAXPATHL, "%s/lang", p);
-      bindtextdomain(PROJECT_NAME, (char *)NameBuff);
-    }
-    xfree(p);
-  }
-# endif
+  char localepath[MAXPATHL] = { 0 };
+  snprintf(localepath, sizeof(localepath), "%s", get_vim_var_str(VV_PROGPATH));
+  char *tail = (char *)path_tail_with_sep((char_u *)localepath);
+  *tail = NUL;
+  tail = (char *)path_tail((char_u *)localepath);
+  xstrlcpy(tail, "share/locale",
+           sizeof(localepath) - (size_t)(tail - localepath));
+  bindtextdomain(PROJECT_NAME, localepath);
   textdomain(PROJECT_NAME);
   TIME_MSG("locale set");
 }
@@ -1176,8 +1162,8 @@ scripterror:
             if (scriptout != NULL) {
               goto scripterror;
             }
-            if ((scriptout = mch_fopen(argv[0],
-                    c == 'w' ? APPENDBIN : WRITEBIN)) == NULL) {
+            if ((scriptout = os_fopen(argv[0], c == 'w' ? APPENDBIN : WRITEBIN))
+                == NULL) {
               mch_errmsg(_("Cannot open for script output: \""));
               mch_errmsg(argv[0]);
               mch_errmsg("\"\n");
@@ -1265,8 +1251,9 @@ static void init_params(mparm_T *paramp, int argc, char **argv)
 static void init_startuptime(mparm_T *paramp)
 {
   for (int i = 1; i < paramp->argc; i++) {
-    if (STRICMP(paramp->argv[i], "--startuptime") == 0 && i + 1 < paramp->argc) {
-      time_fd = mch_fopen(paramp->argv[i + 1], "a");
+    if (STRICMP(paramp->argv[i], "--startuptime") == 0
+        && i + 1 < paramp->argc) {
+      time_fd = os_fopen(paramp->argv[i + 1], "a");
       time_start("--- NVIM STARTING ---");
       break;
     }
@@ -1312,8 +1299,6 @@ static void init_path(const char *exename)
   // shipped with Windows package. This also mimics SearchPath().
   os_setenv_append_path(exepath);
 #endif
-
-    init_signs();
 }
 
 /// Get filename from command line, if any.

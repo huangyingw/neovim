@@ -5,7 +5,9 @@ func Test_taglist()
 	\ "FFoo\tXfoo\t1",
 	\ "FBar\tXfoo\t2",
 	\ "BFoo\tXbar\t1",
-	\ "BBar\tXbar\t2"
+	\ "BBar\tXbar\t2",
+	\ "Kindly\tXbar\t3;\"\tv\tfile:",
+	\ "Command\tXbar\tcall cursor(3, 4)|;\"\td",
 	\ ], 'Xtags')
   set tags=Xtags
   split Xtext
@@ -15,7 +17,20 @@ func Test_taglist()
   call assert_equal(['FFoo', 'BFoo'], map(taglist("Foo", "Xfoo"), {i, v -> v.name}))
   call assert_equal(['BFoo', 'FFoo'], map(taglist("Foo", "Xbar"), {i, v -> v.name}))
 
+  let kind = taglist("Kindly")
+  call assert_equal(1, len(kind))
+  call assert_equal('v', kind[0]['kind'])
+  call assert_equal('3', kind[0]['cmd'])
+  call assert_equal(1, kind[0]['static'])
+  call assert_equal('Xbar', kind[0]['filename'])
+
+  let cmd = taglist("Command")
+  call assert_equal(1, len(cmd))
+  call assert_equal('d', cmd[0]['kind'])
+  call assert_equal('call cursor(3, 4)', cmd[0]['cmd'])
+
   call delete('Xtags')
+  set tags&
   bwipe
 endfunc
 
@@ -36,6 +51,7 @@ func Test_taglist_native_etags()
 	\ map(taglist('set_signals'), {i, v -> [v.name, v.cmd]}))
 
   call delete('Xtags')
+  set tags&
 endfunc
 
 func Test_taglist_ctags_etags()
@@ -55,24 +71,12 @@ func Test_taglist_ctags_etags()
 	\ map(taglist('set_signals'), {i, v -> [v.name, v.cmd]}))
 
   call delete('Xtags')
+  set tags&
 endfunc
 
 func Test_tags_too_long()
   call assert_fails('tag ' . repeat('x', 1020), 'E426')
   tags
-endfunc
-
-" For historical reasons we support a tags file where the last line is missing
-" the newline.
-func Test_tagsfile_without_trailing_newline()
-  call writefile(["Foo\tfoo\t1"], 'Xtags', 'b')
-  set tags=Xtags
-
-  let tl = taglist('.*')
-  call assert_equal(1, len(tl))
-  call assert_equal('Foo', tl[0].name)
-
-  call delete('Xtags')
 endfunc
 
 func Test_tagfiles()
@@ -90,10 +94,25 @@ func Test_tagfiles()
 	\           fnamemodify(tf[0], ':p:gs?\\?/?'))
   helpclose
   call assert_equal(['Xtags1', 'Xtags2'], tagfiles())
-  set tags&
+  " Nvim: defaults to "./tags;,tags", which might cause false positives.
+  set tags=./tags,tags
   call assert_equal([], tagfiles())
 
   call delete('Xtags1')
   call delete('Xtags2')
   bd
+endfunc
+
+" For historical reasons we support a tags file where the last line is missing
+" the newline.
+func Test_tagsfile_without_trailing_newline()
+  call writefile(["Foo\tfoo\t1"], 'Xtags', 'b')
+  set tags=Xtags
+
+  let tl = taglist('.*')
+  call assert_equal(1, len(tl))
+  call assert_equal('Foo', tl[0].name)
+
+  call delete('Xtags')
+  set tags&
 endfunc

@@ -11,6 +11,7 @@ local meth_pcall = helpers.meth_pcall
 local meths = helpers.meths
 local ok, nvim_async, feed = helpers.ok, helpers.nvim_async, helpers.feed
 local os_name = helpers.os_name
+local parse_context = helpers.parse_context
 local request = helpers.request
 local source = helpers.source
 local next_msg = helpers.next_msg
@@ -177,6 +178,11 @@ describe('API', function()
       -- Verify NO hit-enter prompt.
       eq({mode='n', blocking=false}, nvim("get_mode"))
     end)
+
+    it('Does not cause heap buffer overflow with large output', function()
+      eq(eval('string(range(1000000))'),
+         nvim('command_output', 'echo range(1000000)'))
+    end)
   end)
 
   describe('nvim_eval', function()
@@ -338,6 +344,15 @@ describe('API', function()
       eq({false, 'Error executing lua: [string "<nvim>"]:1: '..
                  "did\nthe\nfail"},
          meth_pcall(meths.execute_lua, 'error("did\\nthe\\nfail")', {}))
+    end)
+
+    it('uses native float values', function()
+      eq(2.5, meths.execute_lua("return select(1, ...)", {2.5}))
+      eq("2.5", meths.execute_lua("return vim.inspect(...)", {2.5}))
+
+      -- "special" float values are still accepted as return values.
+      eq(2.5, meths.execute_lua("return vim.api.nvim_eval('2.5')", {}))
+      eq("{\n  [false] = 2.5,\n  [true] = 3\n}", meths.execute_lua("return vim.inspect(vim.api.nvim_eval('2.5'))", {}))
     end)
   end)
 
@@ -668,6 +683,65 @@ describe('API', function()
       helpers.expect([[
         FIRST LINE
         SECOND LINfooE]])
+    end)
+  end)
+
+  describe('nvim_get_context', function()
+    it('returns context dictionary of current editor state', function()
+      local ctx_items = {'regs', 'jumps', 'buflist', 'gvars'}
+      eq({}, parse_context(nvim('get_context', ctx_items)))
+
+      feed('i1<cr>2<cr>3<c-[>ddddddqahjklquuu')
+      feed('gg')
+      feed('G')
+      command('edit! BUF1')
+      command('edit BUF2')
+      nvim('set_var', 'one', 1)
+      nvim('set_var', 'Two', 2)
+      nvim('set_var', 'THREE', 3)
+
+      local expected_ctx = {
+        ['regs'] = {
+          {['rt'] = 1, ['rc'] = {'1'}, ['n'] = 49, ['ru'] = true},
+          {['rt'] = 1, ['rc'] = {'2'}, ['n'] = 50},
+          {['rt'] = 1, ['rc'] = {'3'}, ['n'] = 51},
+          {['rc'] = {'hjkl'}, ['n'] = 97},
+        },
+
+        ['jumps'] = eval(([[
+        filter(map(add(
+        getjumplist()[0], { 'bufnr': bufnr('%'), 'lnum': getcurpos()[1] }),
+        'filter(
+        { "f": expand("#".v:val.bufnr.":p"), "l": v:val.lnum },
+        { k, v -> k != "l" || v != 1 })'), '!empty(v:val.f)')
+        ]]):gsub('\n', '')),
+
+        ['buflist'] = eval([[
+        filter(map(getbufinfo(), '{ "f": v:val.name }'), '!empty(v:val.f)')
+        ]]),
+
+        ['gvars'] = {{'one', 1}, {'Two', 2}, {'THREE', 3}},
+      }
+
+      eq(expected_ctx, parse_context(nvim('get_context', ctx_items)))
+    end)
+  end)
+
+  describe('nvim_load_context', function()
+    it('sets current editor state to given context dictionary', function()
+      local ctx_items = {'regs', 'jumps', 'buflist', 'gvars'}
+      eq({}, parse_context(nvim('get_context', ctx_items)))
+
+      nvim('set_var', 'one', 1)
+      nvim('set_var', 'Two', 2)
+      nvim('set_var', 'THREE', 3)
+      local ctx = nvim('get_context', ctx_items)
+      nvim('set_var', 'one', 'a')
+      nvim('set_var', 'Two', 'b')
+      nvim('set_var', 'THREE', 'c')
+      eq({'a', 'b' ,'c'}, eval('[g:one, g:Two, g:THREE]'))
+      nvim('load_context', ctx)
+      eq({1, 2 ,3}, eval('[g:one, g:Two, g:THREE]'))
     end)
   end)
 
@@ -1079,6 +1153,13 @@ describe('API', function()
     before_each(function()
       meths.set_option('isident', '')
     end)
+
+    local it_maybe_pending = it
+    if (helpers.isCI('appveyor') and os.getenv('CONFIGURATION') == 'MSVC_32') then
+      -- For "works with &opt" (flaky on MSVC_32), but not easy to skip alone.  #10241
+      it_maybe_pending = pending
+    end
+
     local function simplify_east_api_node(line, east_api_node)
       if east_api_node == NIL then
         return nil
@@ -1276,7 +1357,7 @@ describe('API', function()
     end
     assert:set_parameter('TableFormatLevel', 1000000)
     require('test.unit.viml.expressions.parser_tests')(
-        it, _check_parsing, hl, fmtn)
+        it_maybe_pending, _check_parsing, hl, fmtn)
   end)
 
   describe('nvim_list_uis', function()

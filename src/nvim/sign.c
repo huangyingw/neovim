@@ -28,9 +28,6 @@ struct sign
     int         sn_typenr;      // type number of sign
     char_u      *sn_name;       // name of sign
     char_u      *sn_icon;       // name of pixmap
-# ifdef FEAT_SIGN_ICONS
-    void        *sn_image;      // icon image
-# endif
     char_u      *sn_text;       // text used instead of pixmap
     int         sn_line_hl;     // highlight ID for line
     int         sn_text_hl;     // highlight ID for text
@@ -83,11 +80,8 @@ static signgroup_T * sign_group_ref(const char_u *groupname)
   hi = hash_lookup(&sg_table, (char *)groupname, STRLEN(groupname), hash);
   if (HASHITEM_EMPTY(hi)) {
     // new group
-    group = (signgroup_T *)xmalloc(
-        (unsigned)(sizeof(signgroup_T) + STRLEN(groupname)));
-    if (group == NULL) {
-      return NULL;
-    }
+    group = xmalloc((unsigned)(sizeof(signgroup_T) + STRLEN(groupname)));
+
     STRCPY(group->sg_name, groupname);
     group->refcount = 1;
     group->next_sign_id = 1;
@@ -188,10 +182,6 @@ static void insert_sign(
   newsign->typenr = typenr;
   if (group != NULL) {
     newsign->group = sign_group_ref(group);
-    if (newsign->group == NULL) {
-      xfree(newsign);
-      return;
-    }
   } else {
     newsign->group = NULL;
   }
@@ -263,11 +253,7 @@ char_u * sign_typenr2name(int typenr)
 /// Return information about a sign in a Dict
 dict_T * sign_get_info(signlist_T *sign)
 {
-  dict_T  *d;
-
-  if ((d = tv_dict_alloc()) == NULL) {
-    return NULL;
-  }
+  dict_T  *d = tv_dict_alloc();
   tv_dict_add_nr(d,  S_LEN("id"), sign->id);
   tv_dict_add_str(d, S_LEN("group"), ((sign->group == NULL)
                                       ? (char *)""
@@ -696,15 +682,6 @@ static void sign_define_init_icon(sign_T *sp, char_u *icon)
   xfree(sp->sn_icon);
   sp->sn_icon = vim_strsave(icon);
   backslash_halve(sp->sn_icon);
-# ifdef FEAT_SIGN_ICONS
-  if (gui.in_use) {
-    out_flush();
-    if (sp->sn_image != NULL) {
-      gui_mch_destroy_sign(sp->sn_image);
-    }
-    sp->sn_image = gui_mch_register_sign(sp->sn_icon);
-  }
-# endif
 }
 
 /// Initialize the text for a new sign
@@ -1347,8 +1324,8 @@ static void sign_getinfo(sign_T *sp, dict_T *retdict)
 /// Otherwise, return information about the specified sign.
 void sign_getlist(const char_u *name, list_T *retlist)
 {
-  sign_T  *sp = first_sign;
-  dict_T  *dict;
+  sign_T *sp = first_sign;
+  dict_T *dict;
 
   if (name != NULL) {
     sp = sign_find(name, NULL);
@@ -1358,9 +1335,7 @@ void sign_getlist(const char_u *name, list_T *retlist)
   }
 
   for (; sp != NULL && !got_int; sp = sp->sn_next) {
-    if ((dict = tv_dict_alloc()) == NULL) {
-      return;
-    }
+    dict = tv_dict_alloc();
     tv_list_append_dict(retlist, dict);
     sign_getinfo(sp, dict);
 
@@ -1374,14 +1349,13 @@ void sign_getlist(const char_u *name, list_T *retlist)
 list_T *get_buffer_signs(buf_T *buf)
   FUNC_ATTR_NONNULL_RET FUNC_ATTR_NONNULL_ALL FUNC_ATTR_WARN_UNUSED_RESULT
 {
-  signlist_T  *sign;
-  dict_T  *d;
+  signlist_T *sign;
+  dict_T *d;
   list_T *const l = tv_list_alloc(kListLenMayKnow);
 
   FOR_ALL_SIGNS_IN_BUF(buf, sign) {
-    if ((d = sign_get_info(sign)) != NULL) {
-      tv_list_append_dict(l, d);
-    }
+    d = sign_get_info(sign);
+    tv_list_append_dict(l, d);
   }
   return l;
 }
@@ -1394,21 +1368,16 @@ static void sign_get_placed_in_buf(
     const char_u *sign_group,
     list_T *retlist)
 {
-  dict_T  *d;
-  list_T  *l;
-  signlist_T  *sign;
-  dict_T  *sdict;
+  dict_T *d;
+  list_T *l;
+  signlist_T *sign;
 
-  if ((d = tv_dict_alloc()) == NULL) {
-    return;
-  }
+  d = tv_dict_alloc();
   tv_list_append_dict(retlist, d);
 
   tv_dict_add_nr(d, S_LEN("bufnr"), (long)buf->b_fnum);
 
-  if ((l = tv_list_alloc(kListLenMayKnow)) == NULL) {
-    return;
-  }
+  l = tv_list_alloc(kListLenMayKnow);
   tv_dict_add_list(d, S_LEN("signs"), l);
 
   FOR_ALL_SIGNS_IN_BUF(buf, sign) {
@@ -1419,9 +1388,7 @@ static void sign_get_placed_in_buf(
         || (sign_id == 0 && lnum == sign->lnum)
         || (lnum == 0 && sign_id == sign->id)
         || (lnum == sign->lnum && sign_id == sign->id)) {
-      if ((sdict = sign_get_info(sign)) != NULL) {
-        tv_list_append_dict(l, sdict);
-      }
+      tv_list_append_dict(l, sign_get_info(sign));
     }
   }
 }
@@ -1447,21 +1414,6 @@ void sign_get_placed(
     }
   }
 }
-
-# if defined(FEAT_SIGN_ICONS) || defined(PROTO)
-/// Allocate the icons.  Called when the GUI has started.  Allows defining
-/// signs before it starts.
-void sign_gui_started(void)
-{
-  sign_T  *sp;
-
-  for (sp = first_sign; sp != NULL; sp = sp->sn_next) {
-    if (sp->sn_icon != NULL) {
-      sp->sn_image = gui_mch_register_sign(sp->sn_icon);
-    }
-  }
-}
-# endif
 
 /// List one sign.
 static void sign_list_defined(sign_T *sp)
@@ -1565,22 +1517,6 @@ char_u * sign_get_text(int typenr)
   }
   return NULL;
 }
-
-# if defined(FEAT_SIGN_ICONS) || defined(PROTO)
-void * sign_get_image(
-    int   typenr   // the attribute which may have a sign
-)
-{
-  sign_T  *sp;
-
-  for (sp = first_sign; sp != NULL; sp = sp->sn_next) {
-    if (sp->sn_typenr == typenr) {
-      return sp->sn_image;
-    }
-  }
-  return NULL;
-}
-# endif
 
 /// Undefine/free all signs.
 void free_signs(void)

@@ -1,4 +1,5 @@
 " Tests for various functions.
+source shared.vim
 
 " Must be done first, since the alternate buffer must be unset.
 func Test_00_bufexists()
@@ -105,11 +106,9 @@ func Test_strwidth()
     call assert_equal(4, strwidth(1234))
     call assert_equal(5, strwidth(-1234))
 
-    if has('multi_byte')
-      call assert_equal(2, strwidth('😉'))
-      call assert_equal(17, strwidth('Eĥoŝanĝo ĉiuĵaŭde'))
-      call assert_equal((aw == 'single') ? 6 : 7, strwidth('Straße'))
-    endif
+    call assert_equal(2, strwidth('😉'))
+    call assert_equal(17, strwidth('Eĥoŝanĝo ĉiuĵaŭde'))
+    call assert_equal((aw == 'single') ? 6 : 7, strwidth('Straße'))
 
     call assert_fails('call strwidth({->0})', 'E729:')
     call assert_fails('call strwidth([])', 'E730:')
@@ -307,10 +306,8 @@ func Test_strpart()
   call assert_equal('fg', strpart('abcdefg', 5, 4))
   call assert_equal('defg', strpart('abcdefg', 3))
 
-  if has('multi_byte')
-    call assert_equal('lép', strpart('éléphant', 2, 4))
-    call assert_equal('léphant', strpart('éléphant', 2))
-  endif
+  call assert_equal('lép', strpart('éléphant', 2, 4))
+  call assert_equal('léphant', strpart('éléphant', 2))
 endfunc
 
 func Test_tolower()
@@ -319,10 +316,6 @@ func Test_tolower()
   " Test with all printable ASCII characters.
   call assert_equal(' !"#$%&''()*+,-./0123456789:;<=>?@abcdefghijklmnopqrstuvwxyz[\]^_`abcdefghijklmnopqrstuvwxyz{|}~',
           \ tolower(' !"#$%&''()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~'))
-
-  if !has('multi_byte')
-    return
-  endif
 
   " Test with a few uppercase diacritics.
   call assert_equal("aàáâãäåāăąǎǟǡả", tolower("AÀÁÂÃÄÅĀĂĄǍǞǠẢ"))
@@ -397,10 +390,6 @@ func Test_toupper()
   " Test with all printable ASCII characters.
   call assert_equal(' !"#$%&''()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`ABCDEFGHIJKLMNOPQRSTUVWXYZ{|}~',
           \ toupper(' !"#$%&''()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~'))
-
-  if !has('multi_byte')
-    return
-  endif
 
   " Test with a few lowercase diacritics.
   call assert_equal("AÀÁÂÃÄÅĀĂĄǍǞǠẢ", toupper("aàáâãäåāăąǎǟǡả"))
@@ -886,6 +875,14 @@ func Test_Executable()
   elseif has('unix')
     call assert_equal(1, executable('cat'))
     call assert_equal(0, executable('nodogshere'))
+
+    " get "cat" path and remove the leading /
+    let catcmd = exepath('cat')[1:]
+    new
+    lcd /
+    call assert_equal(1, executable(catcmd))
+    call assert_equal('/' .. catcmd, exepath(catcmd))
+    bwipe
   endif
 endfunc
 
@@ -967,8 +964,8 @@ func Test_balloon_show()
 endfunc
 
 func Test_shellescape()
-  let [save_shell, save_shellslash] = [&shell, &shellslash]
-  set shell=bash shellslash
+  let save_shell = &shell
+  set shell=bash
   call assert_equal("'text'", shellescape('text'))
   call assert_equal("'te\"xt'", shellescape('te"xt'))
   call assert_equal("'te'\\''xt'", shellescape("te'xt"))
@@ -982,13 +979,13 @@ func Test_shellescape()
 
   call assert_equal("'te\nxt'", shellescape("te\nxt"))
   call assert_equal("'te\\\nxt'", shellescape("te\nxt", 1))
-  set shell=tcsh shellslash
+  set shell=tcsh
   call assert_equal("'te\\!xt'", shellescape("te!xt"))
   call assert_equal("'te\\\\!xt'", shellescape("te!xt", 1))
   call assert_equal("'te\\\nxt'", shellescape("te\nxt"))
   call assert_equal("'te\\\\\nxt'", shellescape("te\nxt", 1))
 
-  let [&shell, &shellslash] = [save_shell, save_shellslash]
+  let &shell = save_shell
 endfunc
 
 func Test_redo_in_nested_functions()
@@ -1139,4 +1136,95 @@ func Test_reg_executing_and_recording()
   bwipe!
   delfunc s:save_reg_stat
   unlet s:reg_stat
+endfunc
+
+func Test_libcall_libcallnr()
+  if !has('libcall')
+    return
+  endif
+
+  if has('win32')
+    let libc = 'msvcrt.dll'
+  elseif has('mac')
+    let libc = 'libSystem.B.dylib'
+  elseif system('uname -s') =~ 'SunOS'
+    " Set the path to libc.so according to the architecture.
+    let test_bits = system('file ' . GetVimProg())
+    let test_arch = system('uname -p')
+    if test_bits =~ '64-bit' && test_arch =~ 'sparc'
+      let libc = '/usr/lib/sparcv9/libc.so'
+    elseif test_bits =~ '64-bit' && test_arch =~ 'i386'
+      let libc = '/usr/lib/amd64/libc.so'
+    else
+      let libc = '/usr/lib/libc.so'
+    endif
+  elseif system('uname -s') =~ 'OpenBSD'
+    let libc = 'libc.so'
+  else
+    " On Unix, libc.so can be in various places.
+    " Interestingly, using an empty string for the 1st argument of libcall
+    " allows to call functions from libc which is not documented.
+    let libc = ''
+  endif
+
+  if has('win32')
+    call assert_equal($USERPROFILE, libcall(libc, 'getenv', 'USERPROFILE'))
+  else
+    call assert_equal($HOME, libcall(libc, 'getenv', 'HOME'))
+  endif
+
+  " If function returns NULL, libcall() should return an empty string.
+  call assert_equal('', libcall(libc, 'getenv', 'X_ENV_DOES_NOT_EXIT'))
+
+  " Test libcallnr() with string and integer argument.
+  call assert_equal(4, libcallnr(libc, 'strlen', 'abcd'))
+  call assert_equal(char2nr('A'), libcallnr(libc, 'toupper', char2nr('a')))
+
+  call assert_fails("call libcall(libc, 'Xdoesnotexist_', '')", 'E364:')
+  call assert_fails("call libcallnr(libc, 'Xdoesnotexist_', '')", 'E364:')
+
+  call assert_fails("call libcall('Xdoesnotexist_', 'getenv', 'HOME')", 'E364:')
+  call assert_fails("call libcallnr('Xdoesnotexist_', 'strlen', 'abcd')", 'E364:')
+endfunc
+
+func Test_bufadd_bufload()
+  call assert_equal(0, bufexists('someName'))
+  let buf = bufadd('someName')
+  call assert_notequal(0, buf)
+  call assert_equal(1, bufexists('someName'))
+  call assert_equal(0, getbufvar(buf, '&buflisted'))
+  call assert_equal(0, bufloaded(buf))
+  call bufload(buf)
+  call assert_equal(1, bufloaded(buf))
+  call assert_equal([''], getbufline(buf, 1, '$'))
+
+  let curbuf = bufnr('')
+  call writefile(['some', 'text'], 'otherName')
+  let buf = bufadd('otherName')
+  call assert_notequal(0, buf)
+  call assert_equal(1, bufexists('otherName'))
+  call assert_equal(0, getbufvar(buf, '&buflisted'))
+  call assert_equal(0, bufloaded(buf))
+  call bufload(buf)
+  call assert_equal(1, bufloaded(buf))
+  call assert_equal(['some', 'text'], getbufline(buf, 1, '$'))
+  call assert_equal(curbuf, bufnr(''))
+
+  let buf1 = bufadd('')
+  let buf2 = bufadd('')
+  call assert_notequal(0, buf1)
+  call assert_notequal(0, buf2)
+  call assert_notequal(buf1, buf2)
+  call assert_equal(1, bufexists(buf1))
+  call assert_equal(1, bufexists(buf2))
+  call assert_equal(0, bufloaded(buf1))
+  exe 'bwipe ' .. buf1
+  call assert_equal(0, bufexists(buf1))
+  call assert_equal(1, bufexists(buf2))
+  exe 'bwipe ' .. buf2
+  call assert_equal(0, bufexists(buf2))
+
+  bwipe someName
+  bwipe otherName
+  call assert_equal(0, bufexists('someName'))
 endfunc

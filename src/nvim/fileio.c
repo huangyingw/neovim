@@ -15,6 +15,7 @@
 #include "nvim/ascii.h"
 #include "nvim/fileio.h"
 #include "nvim/buffer.h"
+#include "nvim/change.h"
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
 #include "nvim/diff.h"
@@ -57,10 +58,6 @@
 #include "nvim/os/os_defs.h"
 #include "nvim/os/time.h"
 #include "nvim/os/input.h"
-
-#if defined(HAVE_UTIME) && defined(HAVE_UTIME_H)
-# include <utime.h>             /* for struct utimbuf */
-#endif
 
 #define BUFSIZE         8192    /* size of normal write buffer */
 #define SMBUFSIZE       256     /* size of emergency write buffer */
@@ -167,32 +164,28 @@ typedef struct AutoPatCmd {
  * Structure to pass arguments from buf_write() to buf_write_bytes().
  */
 struct bw_info {
-  int bw_fd;                    /* file descriptor */
-  char_u      *bw_buf;          /* buffer with data to be written */
-  int bw_len;                   /* length of data */
+  int bw_fd;                     // file descriptor
+  char_u      *bw_buf;           // buffer with data to be written
+  int bw_len;                    // length of data
 #ifdef HAS_BW_FLAGS
-  int bw_flags;                 /* FIO_ flags */
+  int bw_flags;                  // FIO_ flags
 #endif
-  char_u bw_rest[CONV_RESTLEN];        /* not converted bytes */
-  int bw_restlen;               /* nr of bytes in bw_rest[] */
-  int bw_first;                 /* first write call */
-  char_u      *bw_conv_buf;     /* buffer for writing converted chars */
-  int bw_conv_buflen;           /* size of bw_conv_buf */
-  int bw_conv_error;            /* set for conversion error */
-  linenr_T bw_conv_error_lnum;       /* first line with error or zero */
-  linenr_T bw_start_lnum;       /* line number at start of buffer */
-# ifdef USE_ICONV
-  iconv_t bw_iconv_fd;          /* descriptor for iconv() or -1 */
+  char_u bw_rest[CONV_RESTLEN];  // not converted bytes
+  int bw_restlen;                // nr of bytes in bw_rest[]
+  int bw_first;                  // first write call
+  char_u      *bw_conv_buf;      // buffer for writing converted chars
+  int bw_conv_buflen;            // size of bw_conv_buf
+  int bw_conv_error;             // set for conversion error
+  linenr_T bw_conv_error_lnum;   // first line with error or zero
+  linenr_T bw_start_lnum;        // line number at start of buffer
+# ifdef HAVE_ICONV
+  iconv_t bw_iconv_fd;           // descriptor for iconv() or -1
 # endif
 };
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "fileio.c.generated.h"
 #endif
-
-#ifdef UNIX
-#endif
-
 
 static char *e_auchangedbuf = N_(
     "E812: Autocommands changed buffer or buffer name");
@@ -266,8 +259,8 @@ static AutoPat *last_autopat[NUM_EVENTS] = {
  *
  * return FAIL for failure, NOTDONE for directory (failure), or OK
  */
-int 
-readfile (
+int
+readfile(
     char_u *fname,
     char_u *sfname,
     linenr_T from,
@@ -297,7 +290,7 @@ readfile (
   int wasempty;                         /* buffer was empty before reading */
   colnr_T len;
   long size = 0;
-  char_u      *p = NULL;
+  uint8_t *p = NULL;
   off_T filesize = 0;
   int skip_read = false;
   context_sha256_T sha_ctx;
@@ -335,10 +328,10 @@ readfile (
   char_u      *fenc_next = NULL;        // next item in 'fencs' or NULL
   bool advance_fenc = false;
   long real_size = 0;
-# ifdef USE_ICONV
-  iconv_t iconv_fd = (iconv_t)-1;       /* descriptor for iconv() or -1 */
-  int did_iconv = FALSE;                /* TRUE when iconv() failed and trying
-                                           'charconvert' next */
+# ifdef HAVE_ICONV
+  iconv_t iconv_fd = (iconv_t)-1;       // descriptor for iconv() or -1
+  int did_iconv = false;                // TRUE when iconv() failed and trying
+                                        // 'charconvert' next
 # endif
   int converted = FALSE;                /* TRUE if conversion done */
   int notconverted = FALSE;             /* TRUE if conversion wanted but it
@@ -784,9 +777,8 @@ readfile (
     fenc = curbuf->b_p_fenc;            // use format from buffer
     fenc_alloced = false;
   } else {
-    fenc_next = p_fencs;                /* try items in 'fileencodings' */
-    fenc = next_fenc(&fenc_next);
-    fenc_alloced = true;
+    fenc_next = p_fencs;                // try items in 'fileencodings'
+    fenc = next_fenc(&fenc_next, &fenc_alloced);
   }
 
   /*
@@ -849,7 +841,7 @@ retry:
       fileformat = EOL_UNKNOWN;                 /* detect from file */
   }
 
-# ifdef USE_ICONV
+# ifdef HAVE_ICONV
   if (iconv_fd != (iconv_t)-1) {
     /* aborted conversion with iconv(), close the descriptor */
     iconv_close(iconv_fd);
@@ -876,8 +868,7 @@ retry:
       if (fenc_alloced)
         xfree(fenc);
       if (fenc_next != NULL) {
-        fenc = next_fenc(&fenc_next);
-        fenc_alloced = (fenc_next != NULL);
+        fenc = next_fenc(&fenc_next, &fenc_alloced);
       } else {
         fenc = (char_u *)"";
         fenc_alloced = false;
@@ -916,15 +907,14 @@ retry:
 
 
 
-# ifdef USE_ICONV
-    /*
-     * Try using iconv() if we can't convert internally.
-     */
+# ifdef HAVE_ICONV
+    // Try using iconv() if we can't convert internally.
     if (fio_flags == 0
         && !did_iconv
-        )
+        ) {
       iconv_fd = (iconv_t)my_iconv_open(
           enc_utf8 ? (char_u *)"utf-8" : p_enc, fenc);
+    }
 # endif
 
     /*
@@ -933,12 +923,12 @@ retry:
      */
     if (fio_flags == 0 && !read_stdin && !read_buffer && *p_ccv != NUL
         && !read_fifo
-#  ifdef USE_ICONV
+#  ifdef HAVE_ICONV
         && iconv_fd == (iconv_t)-1
 #  endif
         ) {
-#  ifdef USE_ICONV
-      did_iconv = FALSE;
+#  ifdef HAVE_ICONV
+      did_iconv = false;
 #  endif
       /* Skip conversion when it's already done (retry for wrong
        * "fileformat"). */
@@ -958,7 +948,7 @@ retry:
       }
     } else {
       if (fio_flags == 0
-# ifdef USE_ICONV
+# ifdef HAVE_ICONV
           && iconv_fd == (iconv_t)-1
 # endif
           ) {
@@ -1031,20 +1021,23 @@ retry:
          * ucs-4 to utf-8: 4 bytes become up to 6 bytes, size must be
          * multiple of 4 */
         real_size = (int)size;
-# ifdef USE_ICONV
-        if (iconv_fd != (iconv_t)-1)
+# ifdef HAVE_ICONV
+        if (iconv_fd != (iconv_t)-1) {
           size = size / ICONV_MULT;
-        else
+        } else {
 # endif
-        if (fio_flags & FIO_LATIN1)
+        if (fio_flags & FIO_LATIN1) {
           size = size / 2;
-        else if (fio_flags & (FIO_UCS2 | FIO_UTF16))
+        } else if (fio_flags & (FIO_UCS2 | FIO_UTF16)) {
           size = (size * 2 / 3) & ~1;
-        else if (fio_flags & FIO_UCS4)
+        } else if (fio_flags & FIO_UCS4) {
           size = (size * 2 / 3) & ~3;
-        else if (fio_flags == FIO_UCSBOM)
-          size = size / ICONV_MULT;             /* worst case */
-
+        } else if (fio_flags == FIO_UCSBOM) {
+          size = size / ICONV_MULT;  // worst case
+        }
+# ifdef HAVE_ICONV
+        }
+# endif
         if (conv_restlen > 0) {
           // Insert unconverted bytes from previous line.
           memmove(ptr, conv_rest, conv_restlen);  // -V614
@@ -1120,7 +1113,7 @@ retry:
 
             /* When we did a conversion report an error. */
             if (fio_flags != 0
-# ifdef USE_ICONV
+# ifdef HAVE_ICONV
                 || iconv_fd != (iconv_t)-1
 # endif
                 ) {
@@ -1143,7 +1136,7 @@ retry:
                * leave the UTF8 checking code to do it, as it
                * works slightly differently. */
               if (bad_char_behavior != BAD_KEEP && (fio_flags != 0
-# ifdef USE_ICONV
+# ifdef HAVE_ICONV
                                                     || iconv_fd != (iconv_t)-1
 # endif
                                                     )) {
@@ -1152,8 +1145,8 @@ retry:
                   --conv_restlen;
                 }
               }
-              fio_flags = 0;                    /* don't convert this */
-# ifdef USE_ICONV
+              fio_flags = 0;  // don't convert this
+# ifdef HAVE_ICONV
               if (iconv_fd != (iconv_t)-1) {
                 iconv_close(iconv_fd);
                 iconv_fd = (iconv_t)-1;
@@ -1224,7 +1217,7 @@ retry:
       if (size <= 0)
         break;
 
-# ifdef USE_ICONV
+# ifdef HAVE_ICONV
       if (iconv_fd != (iconv_t)-1) {
         /*
          * Attempt conversion of the read bytes to 'encoding' using
@@ -1283,7 +1276,7 @@ retry:
 # endif
 
       if (fio_flags != 0) {
-        int u8c;
+        unsigned int u8c;
         char_u  *dest;
         char_u  *tail = NULL;
 
@@ -1431,33 +1424,13 @@ retry:
               }
             }
           }
-          if (enc_utf8) {               /* produce UTF-8 */
-            dest -= utf_char2len(u8c);
-            (void)utf_char2bytes(u8c, dest);
-          } else {                    /* produce Latin1 */
-            --dest;
-            if (u8c >= 0x100) {
-              /* character doesn't fit in latin1, retry with
-               * another fenc when possible, otherwise just
-               * report the error. */
-              if (can_retry)
-                goto rewind_retry;
-              if (conv_error == 0)
-                conv_error = readfile_linenr(linecnt, ptr, p);
-              if (bad_char_behavior == BAD_DROP)
-                ++dest;
-              else if (bad_char_behavior == BAD_KEEP)
-                *dest = u8c;
-              else if (eap != NULL && eap->bad_char != 0)
-                *dest = bad_char_behavior;
-              else
-                *dest = 0xBF;
-            } else
-              *dest = u8c;
-          }
+          assert(u8c <= INT_MAX);
+          // produce UTF-8
+          dest -= utf_char2len((int)u8c);
+          (void)utf_char2bytes((int)u8c, dest);
         }
 
-        /* move the linerest to before the converted characters */
+        // move the linerest to before the converted characters
         line_start = dest - linerest;
         memmove(line_start, buffer, (size_t)linerest);
         size = (long)((ptr + real_size) - dest);
@@ -1465,18 +1438,19 @@ retry:
       } else if (enc_utf8 && !curbuf->b_p_bin) {
         int incomplete_tail = FALSE;
 
-        /* Reading UTF-8: Check if the bytes are valid UTF-8. */
-        for (p = ptr;; ++p) {
+        // Reading UTF-8: Check if the bytes are valid UTF-8.
+        for (p = ptr;; p++) {
           int todo = (int)((ptr + size) - p);
           int l;
 
-          if (todo <= 0)
+          if (todo <= 0) {
             break;
+          }
           if (*p >= 0x80) {
-            /* A length of 1 means it's an illegal byte.  Accept
-             * an incomplete character at the end though, the next
-             * read() will get the next bytes, we'll check it
-             * then. */
+            // A length of 1 means it's an illegal byte.  Accept
+            // an incomplete character at the end though, the next
+            // read() will get the next bytes, we'll check it
+            // then.
             l = utf_ptr2len_len(p, todo);
             if (l > todo && !incomplete_tail) {
               /* Avoid retrying with a different encoding when
@@ -1501,10 +1475,11 @@ retry:
                * file is more likely than a conversion error. */
               if (can_retry && !incomplete_tail)
                 break;
-# ifdef USE_ICONV
-              /* When we did a conversion report an error. */
-              if (iconv_fd != (iconv_t)-1 && conv_error == 0)
+# ifdef HAVE_ICONV
+              // When we did a conversion report an error.
+              if (iconv_fd != (iconv_t)-1 && conv_error == 0) {
                 conv_error = readfile_linenr(linecnt, ptr, p);
+              }
 # endif
               /* Remember the first linenr with an illegal byte */
               if (conv_error == 0 && illegal_byte == 0)
@@ -1524,15 +1499,18 @@ retry:
         if (p < ptr + size && !incomplete_tail) {
           /* Detected a UTF-8 error. */
 rewind_retry:
-          /* Retry reading with another conversion. */
-# ifdef USE_ICONV
-          if (*p_ccv != NUL && iconv_fd != (iconv_t)-1)
-            /* iconv() failed, try 'charconvert' */
-            did_iconv = TRUE;
-          else
+          // Retry reading with another conversion.
+# ifdef HAVE_ICONV
+          if (*p_ccv != NUL && iconv_fd != (iconv_t)-1) {
+            // iconv() failed, try 'charconvert'
+            did_iconv = true;
+          } else {
 # endif
           // use next item from 'fileencodings'
           advance_fenc = true;
+# ifdef HAVE_ICONV
+          }
+# endif
           file_rewind = true;
           goto retry;
         }
@@ -1731,13 +1709,13 @@ failed:
     // Remember the current file format.
     save_file_ff(curbuf);
     // If editing a new file: set 'fenc' for the current buffer.
-    // Also for ":read ++edit file". 
+    // Also for ":read ++edit file".
     set_string_option_direct((char_u *)"fenc", -1, fenc,
         OPT_FREE | OPT_LOCAL, 0);
   }
   if (fenc_alloced)
     xfree(fenc);
-# ifdef USE_ICONV
+# ifdef HAVE_ICONV
   if (iconv_fd != (iconv_t)-1) {
     iconv_close(iconv_fd);
 #  ifndef __clang_analyzer__
@@ -1782,6 +1760,9 @@ failed:
       ml_delete(curbuf->b_ml.ml_line_count, false);
       linecnt--;
     }
+    curbuf->deleted_bytes = 0;
+    curbuf->deleted_codepoints = 0;
+    curbuf->deleted_codeunits = 0;
     linecnt = curbuf->b_ml.ml_line_count - linecnt;
     if (filesize == 0)
       linecnt = 0;
@@ -2030,11 +2011,11 @@ bool is_dev_fd_file(char_u *fname)
  * line number where we are now.
  * Used for error messages that include a line number.
  */
-static linenr_T 
-readfile_linenr (
-    linenr_T linecnt,               /* line count before reading more bytes */
-    char_u *p,                 /* start of more bytes read */
-    char_u *endp              /* end of more bytes read */
+static linenr_T
+readfile_linenr(
+    linenr_T linecnt,         // line count before reading more bytes
+    char_u *p,                // start of more bytes read
+    char_u *endp              // end of more bytes read
 )
 {
   char_u      *s;
@@ -2099,19 +2080,19 @@ void set_forced_fenc(exarg_T *eap)
   }
 }
 
-/*
- * Find next fileencoding to use from 'fileencodings'.
- * "pp" points to fenc_next.  It's advanced to the next item.
- * When there are no more items, an empty string is returned and *pp is set to
- * NULL.
- * When *pp is not set to NULL, the result is in allocated memory.
- */
-static char_u *next_fenc(char_u **pp)
+// Find next fileencoding to use from 'fileencodings'.
+// "pp" points to fenc_next.  It's advanced to the next item.
+// When there are no more items, an empty string is returned and *pp is set to
+// NULL.
+// When *pp is not set to NULL, the result is in allocated memory and "alloced"
+// is set to true.
+static char_u *next_fenc(char_u **pp, bool *alloced)
   FUNC_ATTR_NONNULL_ALL FUNC_ATTR_NONNULL_RET
 {
   char_u      *p;
   char_u      *r;
 
+  *alloced = false;
   if (**pp == NUL) {
     *pp = NULL;
     return (char_u *)"";
@@ -2127,6 +2108,7 @@ static char_u *next_fenc(char_u **pp)
     xfree(r);
     r = p;
   }
+  *alloced = true;
   return r;
 }
 
@@ -2198,34 +2180,6 @@ static void check_marks_read(void)
   curbuf->b_marks_read = true;
 }
 
-#ifdef UNIX
-static void 
-set_file_time (
-    char_u *fname,
-    time_t atime,               /* access time */
-    time_t mtime               /* modification time */
-)
-{
-# if defined(HAVE_UTIME) && defined(HAVE_UTIME_H)
-  struct utimbuf buf;
-
-  buf.actime  = atime;
-  buf.modtime = mtime;
-  (void)utime((char *)fname, &buf);
-# else
-#  if defined(HAVE_UTIMES)
-  struct timeval tvp[2];
-
-  tvp[0].tv_sec   = atime;
-  tvp[0].tv_usec  = 0;
-  tvp[1].tv_sec   = mtime;
-  tvp[1].tv_usec  = 0;
-  (void)utimes((char *)fname, (const struct timeval *)&tvp);
-#  endif
-# endif
-}
-#endif /* UNIX */
-
 /*
  * buf_write() - write to file "fname" lines "start" through "end"
  *
@@ -2242,8 +2196,8 @@ set_file_time (
  *
  * return FAIL for failure, OK otherwise
  */
-int 
-buf_write (
+int
+buf_write(
     buf_T *buf,
     char_u *fname,
     char_u *sfname,
@@ -2346,7 +2300,7 @@ buf_write (
   write_info.bw_conv_error = FALSE;
   write_info.bw_conv_error_lnum = 0;
   write_info.bw_restlen = 0;
-# ifdef USE_ICONV
+# ifdef HAVE_ICONV
   write_info.bw_iconv_fd = (iconv_t)-1;
 # endif
 
@@ -2887,9 +2841,9 @@ buf_write (
           }
 
 #ifdef UNIX
-          set_file_time(backup,
-                        file_info_old.stat.st_atim.tv_sec,
-                        file_info_old.stat.st_mtim.tv_sec);
+          os_file_settime((char *)backup,
+                          file_info_old.stat.st_atim.tv_sec,
+                          file_info_old.stat.st_mtim.tv_sec);
 #endif
 #ifdef HAVE_ACL
           mch_set_acl(backup, acl);
@@ -3067,7 +3021,7 @@ nobackup:
 
 
   if (converted && wb_flags == 0) {
-#  ifdef USE_ICONV
+#  ifdef HAVE_ICONV
     // Use iconv() conversion when conversion is needed and it's not done
     // internally.
     write_info.bw_iconv_fd = (iconv_t)my_iconv_open(fenc,
@@ -3097,7 +3051,7 @@ nobackup:
     }
   }
   if (converted && wb_flags == 0
-#  ifdef USE_ICONV
+#  ifdef HAVE_ICONV
       && write_info.bw_iconv_fd == (iconv_t)-1
 #  endif
       && wfname == fname
@@ -3572,9 +3526,9 @@ restore_backup:
         vim_rename(backup, (char_u *)org);
         XFREE_CLEAR(backup);                   // don't delete the file
 #ifdef UNIX
-        set_file_time((char_u *)org,
-                      file_info_old.stat.st_atim.tv_sec,
-                      file_info_old.stat.st_mtim.tv_sec);
+        os_file_settime(org,
+                        file_info_old.stat.st_atim.tv_sec,
+                        file_info_old.stat.st_mtim.tv_sec);
 #endif
       }
     }
@@ -3625,7 +3579,7 @@ nofail:
     xfree(buffer);
   xfree(fenc_tofree);
   xfree(write_info.bw_conv_buf);
-# ifdef USE_ICONV
+# ifdef HAVE_ICONV
   if (write_info.bw_iconv_fd != (iconv_t)-1) {
     iconv_close(write_info.bw_iconv_fd);
     write_info.bw_iconv_fd = (iconv_t)-1;
@@ -4000,7 +3954,7 @@ static int buf_write_bytes(struct bw_info *ip)
       }
     }
 
-# ifdef USE_ICONV
+# ifdef HAVE_ICONV
     if (ip->bw_iconv_fd != (iconv_t)-1) {
       const char  *from;
       size_t fromlen;
@@ -4303,15 +4257,13 @@ void shorten_buf_fname(buf_T *buf, char_u *dirname, int force)
       buf->b_sfname = vim_strsave(p);
       buf->b_fname = buf->b_sfname;
     }
-    if (p == NULL || buf->b_fname == NULL) {
+    if (p == NULL) {
       buf->b_fname = buf->b_ffname;
     }
   }
 }
 
-/*
- * Shorten filenames for all buffers.
- */
+/// Shorten filenames for all buffers.
 void shorten_fnames(int force)
 {
   char_u dirname[MAXPATHL];
@@ -4320,8 +4272,8 @@ void shorten_fnames(int force)
   FOR_ALL_BUFFERS(buf) {
       shorten_buf_fname(buf, dirname, force);
 
-    /* Always make the swap file name a full path, a "nofile" buffer may
-     * also have a swap file. */
+    // Always make the swap file name a full path, a "nofile" buffer may
+    // also have a swap file.
     mf_fullname(buf->b_ml.ml_mfp);
   }
   status_redraw_all();
@@ -4743,17 +4695,15 @@ int vim_rename(const char_u *from, const char_u *to)
 
 static int already_warned = FALSE;
 
-/*
- * Check if any not hidden buffer has been changed.
- * Postpone the check if there are characters in the stuff buffer, a global
- * command is being executed, a mapping is being executed or an autocommand is
- * busy.
- * Returns TRUE if some message was written (screen should be redrawn and
- * cursor positioned).
- */
-int 
-check_timestamps (
-    int focus                      /* called for GUI focus event */
+// Check if any not hidden buffer has been changed.
+// Postpone the check if there are characters in the stuff buffer, a global
+// command is being executed, a mapping is being executed or an autocommand is
+// busy.
+// Returns TRUE if some message was written (screen should be redrawn and
+// cursor positioned).
+int
+check_timestamps(
+    int focus                      // called for GUI focus event
 )
 {
   int didit = 0;
@@ -4855,8 +4805,8 @@ static int move_lines(buf_T *frombuf, buf_T *tobuf)
  * return 2 if a message has been displayed.
  * return 0 otherwise.
  */
-int 
-buf_check_timestamp (
+int
+buf_check_timestamp(
     buf_T *buf,
     int focus               /* called for GUI focus event */
 )
@@ -4866,13 +4816,12 @@ buf_check_timestamp (
   char_u      *path;
   char        *mesg = NULL;
   char        *mesg2 = "";
-  int helpmesg = FALSE;
-  int reload = FALSE;
-  int can_reload = FALSE;
+  bool helpmesg = false;
+  bool reload = false;
+  bool can_reload = false;
   uint64_t orig_size = buf->b_orig_size;
   int orig_mode = buf->b_orig_mode;
-  static int busy = FALSE;
-  int n;
+  static bool busy = false;
   char_u      *s;
   char        *reason;
 
@@ -4897,16 +4846,16 @@ buf_check_timestamp (
       && buf->b_mtime != 0
       && (!(file_info_ok = os_fileinfo((char *)buf->b_ffname, &file_info))
           || time_differs(file_info.stat.st_mtim.tv_sec, buf->b_mtime)
-          || (int)file_info.stat.st_mode != buf->b_orig_mode
-          )) {
+          || (int)file_info.stat.st_mode != buf->b_orig_mode)) {
+    const long prev_b_mtime = buf->b_mtime;
+
     retval = 1;
 
     // set b_mtime to stop further warnings (e.g., when executing
     // FileChangedShell autocmd)
     if (!file_info_ok) {
-      // When 'autoread' is set we'll check the file again to see if it
-      // re-appears.
-      buf->b_mtime = buf->b_p_ar;
+      // Check the file again later to see if it re-appears.
+      buf->b_mtime = -1;
       buf->b_orig_size = 0;
       buf->b_orig_mode = 0;
     } else {
@@ -4915,28 +4864,25 @@ buf_check_timestamp (
 
     /* Don't do anything for a directory.  Might contain the file
      * explorer. */
-    if (os_isdir(buf->b_fname))
-      ;
-
-    /*
-     * If 'autoread' is set, the buffer has no changes and the file still
-     * exists, reload the buffer.  Use the buffer-local option value if it
-     * was set, the global option value otherwise.
-     */
-    else if ((buf->b_p_ar >= 0 ? buf->b_p_ar : p_ar)
-             && !bufIsChanged(buf) && file_info_ok)
-      reload = TRUE;
-    else {
-      if (!file_info_ok)
+    if (os_isdir(buf->b_fname)) {
+    } else if ((buf->b_p_ar >= 0 ? buf->b_p_ar : p_ar)
+               && !bufIsChanged(buf) && file_info_ok) {
+      // If 'autoread' is set, the buffer has no changes and the file still
+      // exists, reload the buffer.  Use the buffer-local option value if it
+      // was set, the global option value otherwise.
+      reload = true;
+    } else {
+      if (!file_info_ok) {
         reason = "deleted";
-      else if (bufIsChanged(buf))
+      } else if (bufIsChanged(buf)) {
         reason = "conflict";
-      else if (orig_size != buf->b_orig_size || buf_contents_changed(buf))
+      } else if (orig_size != buf->b_orig_size || buf_contents_changed(buf)) {
         reason = "changed";
-      else if (orig_mode != buf->b_orig_mode)
+      } else if (orig_mode != buf->b_orig_mode) {
         reason = "mode";
-      else
+      } else {
         reason = "time";
+      }
 
       // Only give the warning if there are no FileChangedShell
       // autocommands.
@@ -4945,8 +4891,8 @@ buf_check_timestamp (
       set_vim_var_string(VV_FCS_REASON, reason, -1);
       set_vim_var_string(VV_FCS_CHOICE, "", -1);
       allbuf_lock++;
-      n = apply_autocmds(EVENT_FILECHANGEDSHELL,
-                         buf->b_fname, buf->b_fname, false, buf);
+      bool n = apply_autocmds(EVENT_FILECHANGEDSHELL,
+                              buf->b_fname, buf->b_fname, false, buf);
       allbuf_lock--;
       busy = false;
       if (n) {
@@ -4954,25 +4900,28 @@ buf_check_timestamp (
           EMSG(_("E246: FileChangedShell autocommand deleted buffer"));
         }
         s = get_vim_var_str(VV_FCS_CHOICE);
-        if (STRCMP(s, "reload") == 0 && *reason != 'd')
-          reload = TRUE;
-        else if (STRCMP(s, "ask") == 0)
-          n = FALSE;
-        else
+        if (STRCMP(s, "reload") == 0 && *reason != 'd') {
+          reload = true;
+        } else if (STRCMP(s, "ask") == 0) {
+          n = false;
+        } else {
           return 2;
+        }
       }
       if (!n) {
-        if (*reason == 'd')
-          mesg = _("E211: File \"%s\" no longer available");
-        else {
-          helpmesg = TRUE;
-          can_reload = TRUE;
-          /*
-           * Check if the file contents really changed to avoid
-           * giving a warning when only the timestamp was set (e.g.,
-           * checked out of CVS).  Always warn when the buffer was
-           * changed.
-           */
+        if (*reason == 'd') {
+          // Only give the message once.
+          if (prev_b_mtime != -1) {
+            mesg = _("E211: File \"%s\" no longer available");
+          }
+        } else {
+          helpmesg = true;
+          can_reload = true;
+
+          // Check if the file contents really changed to avoid
+          // giving a warning when only the timestamp was set (e.g.,
+          // checked out of CVS).  Always warn when the buffer was
+          // changed.
           if (reason[2] == 'n') {
             mesg = _(
                 "W12: Warning: File \"%s\" has changed and the buffer was changed in Vim as well");
@@ -4998,7 +4947,7 @@ buf_check_timestamp (
     retval = 1;
     mesg = _("W13: Warning: File \"%s\" has been created after editing started");
     buf->b_flags |= BF_NEW_W;
-    can_reload = TRUE;
+    can_reload = true;
   }
 
   if (mesg != NULL) {
@@ -6304,12 +6253,10 @@ static int do_autocmd_event(event_T event, char_u *pat, bool once, int nested,
   return OK;
 }
 
-/*
- * Implementation of ":doautocmd [group] event [fname]".
- * Return OK for success, FAIL for failure;
- */
-int 
-do_doautocmd (
+// Implementation of ":doautocmd [group] event [fname]".
+// Return OK for success, FAIL for failure;
+int
+do_doautocmd(
     char_u *arg,
     int do_msg,  // give message for no matching autocmds?
     bool *did_something
@@ -7093,11 +7040,9 @@ void unblock_autocmds(void)
     apply_autocmds(EVENT_TERMRESPONSE, NULL, NULL, FALSE, curbuf);
 }
 
-/*
- * Find next autocommand pattern that matches.
- */
-static void 
-auto_next_pat (
+// Find next autocommand pattern that matches.
+static void
+auto_next_pat(
     AutoPatCmd *apc,
     int stop_at_last                   /* stop when 'last' flag is set */
 )

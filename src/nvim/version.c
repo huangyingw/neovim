@@ -52,12 +52,8 @@ static char *features[] = {
 "-acl",
 #endif
 
-#if (defined(HAVE_ICONV_H) && defined(USE_ICONV)) || defined(DYNAMIC_ICONV)
-# ifdef DYNAMIC_ICONV
-"+iconv/dyn",
-# else
+#if defined(HAVE_ICONV)
 "+iconv",
-# endif
 #else
 "-iconv",
 #endif
@@ -76,7 +72,7 @@ static const int included_patches[] = {
   // 1848,
   1847,
   // 1846,
-  // 1845,
+  1845,
   // 1844,
   1843,
   // 1842,
@@ -137,7 +133,7 @@ static const int included_patches[] = {
   1787,
   // 1786,
   1785,
-  // 1784,
+  1784,
   // 1783,
   1782,
   1781,
@@ -165,7 +161,7 @@ static const int included_patches[] = {
   // 1759,
   1758,
   1757,
-  // 1756,
+  1756,
   1755,
   // 1754,
   // 1753,
@@ -186,7 +182,7 @@ static const int included_patches[] = {
   // 1738,
   1737,
   1736,
-  // 1735,
+  1735,
   1734,
   // 1733,
   // 1732,
@@ -195,10 +191,10 @@ static const int included_patches[] = {
   // 1729,
   // 1728,
   1727,
-  // 1726,
+  1726,
   // 1725,
   // 1724,
-  // 1723,
+  1723,
   // 1722,
   // 1721,
   // 1720,
@@ -217,9 +213,9 @@ static const int included_patches[] = {
   1707,
   // 1706,
   1705,
-  // 1704,
+  1704,
   // 1703,
-  // 1702,
+  1702,
   1701,
   1700,
   1699,
@@ -232,7 +228,7 @@ static const int included_patches[] = {
   1692,
   // 1691,
   // 1690,
-  // 1689,
+  1689,
   // 1688,
   1687,
   1686,
@@ -252,7 +248,7 @@ static const int included_patches[] = {
   1672,
   // 1671,
   // 1670,
-  // 1669,
+  1669,
   // 1668,
   // 1667,
   // 1666,
@@ -372,7 +368,7 @@ static const int included_patches[] = {
   // 1552,
   // 1551,
   // 1550,
-  // 1549,
+  1549,
   1548,
   1547,
   // 1546,
@@ -403,9 +399,9 @@ static const int included_patches[] = {
   // 1521,
   // 1520,
   1519,
-  // 1518,
+  1518,
   1517,
-  // 1516,
+  1516,
   // 1515,
   1514,
   1513,
@@ -507,9 +503,9 @@ static const int included_patches[] = {
   1417,
   1416,
   1415,
-  // 1414,
+  1414,
   1413,
-  // 1412,
+  1412,
   1411,
   1410,
   1409,
@@ -537,7 +533,7 @@ static const int included_patches[] = {
   1387,
   // 1386,
   1385,
-  // 1384,
+  1384,
   1383,
   // 1382,
   // 1381,
@@ -616,7 +612,7 @@ static const int included_patches[] = {
   1308,
   // 1307,
   1306,
-  // 1305,
+  1305,
   1304,
   1303,
   1302,
@@ -643,7 +639,7 @@ static const int included_patches[] = {
   1281,
   1280,
   1279,
-  // 1278,
+  1278,
   // 1277,
   // 1276,
   1275,
@@ -676,7 +672,7 @@ static const int included_patches[] = {
   1248,
   1247,
   // 1246,
-  // 1245,
+  1245,
   // 1244,
   1243,
   1242,
@@ -968,7 +964,7 @@ static const int included_patches[] = {
   // 956,
   955,
   954,
-  // 953,
+  953,
   952,
   951,
   950,
@@ -988,9 +984,9 @@ static const int included_patches[] = {
   // 936,
   // 935,
   // 934,
-  // 933,
+  933,
   // 932,
-  // 931,
+  931,
   // 930,
   // 929,
   928,
@@ -1008,7 +1004,7 @@ static const int included_patches[] = {
   // 916,
   915,
   // 914,
-  // 913,
+  913,
   // 912,
   911,
   // 910,
@@ -1022,43 +1018,43 @@ static const int included_patches[] = {
   // 902,
   901,
   900,
-  // 899,
-  // 898,
+  899,
+  898,
   897,
-  // 896,
+  896,
   895,
   894,
-  // 893,
-  // 892,
+  893,
+  892,
   891,
   890,
   889,
   888,
-  // 887,
+  887,
   886,
-  // 885,
-  // 884,
+  885,
+  884,
   883,
-  // 882,
+  882,
   881,
   880,
   879,
   878,
-  // 877,
+  877,
   876,
   875,
-  // 874,
+  874,
   873,
   872,
   871,
-  // 870,
-  // 869,
+  870,
+  869,
   868,
-  // 867,
+  867,
   866,
   865,
-  // 864,
-  // 863,
+  864,
+  863,
   862,
   861,
   860,
@@ -1100,12 +1096,12 @@ static const int included_patches[] = {
   824,
   823,
   822,
-  // 821,
+  821,
   820,
   819,
-  // 818,
-  // 817,
-  // 816,
+  818,
+  817,
+  816,
   815,
   814,
   813,
@@ -1118,7 +1114,7 @@ static const int included_patches[] = {
   806,
   805,
   804,
-  // 803,
+  803,
   802,
   801,
   800,
@@ -2002,30 +1998,78 @@ void ex_version(exarg_T *eap)
   }
 }
 
-/// List all features aligned in columns, dictionary style.
+/// Output a string for the version message.  If it's going to wrap, output a
+/// newline, unless the message is too long to fit on the screen anyway.
+/// When "wrap" is TRUE wrap the string in [].
+/// @param s
+/// @param wrap
+static void version_msg_wrap(char_u *s, int wrap)
+{
+  int len = (int)vim_strsize(s) + (wrap ? 2 : 0);
+
+  if (!got_int
+      && (len < Columns)
+      && (msg_col + len >= Columns)
+      && (*s != '\n')) {
+    msg_putchar('\n');
+  }
+
+  if (!got_int) {
+    if (wrap) {
+      msg_puts("[");
+    }
+    msg_puts((char *)s);
+    if (wrap) {
+      msg_puts("]");
+    }
+  }
+}
+
+static void version_msg(char *s)
+{
+  version_msg_wrap((char_u *)s, false);
+}
+
+/// List all features.
+/// This does not use list_in_columns (as in Vim), because there are only a
+/// few, and we do not start at a new line.
 static void list_features(void)
 {
-  int nfeat = 0;
+  version_msg(_("\n\nFeatures: "));
+  for (int i = 0; features[i] != NULL; i++) {
+    version_msg(features[i]);
+    if (features[i+1] != NULL) {
+      version_msg(" ");
+    }
+  }
+  version_msg("\nSee \":help feature-compile\"\n\n");
+}
+
+/// List string items nicely aligned in columns.
+/// When "size" is < 0 then the last entry is marked with NULL.
+/// The entry with index "current" is inclosed in [].
+void list_in_columns(char_u **items, int size, int current)
+{
+  int item_count = 0;
   int width = 0;
 
-  // Find the length of the longest feature name, use that + 1 as the column
-  // width
+  // Find the length of the longest item, use that + 1 as the column width.
   int i;
-  for (i = 0; features[i] != NULL; ++i) {
-    int l = (int)STRLEN(features[i]);
+  for (i = 0; size < 0 ? items[i] != NULL : i < size; i++) {
+    int l = (int)vim_strsize(items[i]) + (i == current ? 2 : 0);
 
     if (l > width) {
       width = l;
     }
-    nfeat++;
+    item_count++;
   }
   width += 1;
 
   if (Columns < width) {
     // Not enough screen columns - show one per line
-    for (i = 0; features[i] != NULL; ++i) {
-      version_msg(features[i]);
-      if (msg_col > 0) {
+    for (i = 0; i < item_count; i++) {
+      version_msg_wrap(items[i], i == current);
+      if (msg_col > 0 && i < item_count - 1) {
         msg_putchar('\n');
       }
     }
@@ -2035,28 +2079,41 @@ static void list_features(void)
   // The rightmost column doesn't need a separator.
   // Sacrifice it to fit in one more column if possible.
   int ncol = (int)(Columns + 1) / width;
-  int nrow = nfeat / ncol + (nfeat % ncol ? 1 : 0);
+  int nrow = item_count / ncol + (item_count % ncol ? 1 : 0);
+  int cur_row = 1;
 
-  // i counts columns then rows.  idx counts rows then columns.
-  for (i = 0; !got_int && i < nrow * ncol; ++i) {
+  // "i" counts columns then rows.  "idx" counts rows then columns.
+  for (i = 0; !got_int && i < nrow * ncol; i++) {
     int idx = (i / ncol) + (i % ncol) * nrow;
-    if (idx < nfeat) {
+    if (idx < item_count) {
       int last_col = (i + 1) % ncol == 0;
-      msg_puts(features[idx]);
+      if (idx == current) {
+        msg_putchar('[');
+      }
+      msg_puts((char *)items[idx]);
+      if (idx == current) {
+        msg_putchar(']');
+      }
       if (last_col) {
-        if (msg_col > 0) {
+        if (msg_col > 0 && cur_row < nrow) {
           msg_putchar('\n');
         }
+        cur_row++;
       } else {
-        msg_putchar(' ');
+        while (msg_col % width) {
+          msg_putchar(' ');
+        }
       }
     } else {
+      // this row is out of items, thus at the end of the row
       if (msg_col > 0) {
-        msg_putchar('\n');
+        if (cur_row < nrow) {
+          msg_putchar('\n');
+        }
+        cur_row++;
       }
     }
   }
-  MSG_PUTS("See \":help feature-compile\"\n\n");
 }
 
 void list_lua_version(void)
@@ -2094,8 +2151,6 @@ void list_version(void)
   }
 #endif  // ifdef HAVE_PATHDEF
 
-  version_msg(_("\n\nFeatures: "));
-
   list_features();
 
 #ifdef SYS_VIMRC_FILE
@@ -2119,26 +2174,6 @@ void list_version(void)
 #endif  // ifdef HAVE_PATHDEF
 
   version_msg("\nRun :checkhealth for more info");
-}
-
-/// Output a string for the version message.  If it's going to wrap, output a
-/// newline, unless the message is too long to fit on the screen anyway.
-///
-/// @param s
-static void version_msg(char *s)
-{
-  int len = (int)STRLEN(s);
-
-  if (!got_int
-      && (len < (int)Columns)
-      && (msg_col + len >= (int)Columns)
-      && (*s != '\n')) {
-    msg_putchar('\n');
-  }
-
-  if (!got_int) {
-    MSG_PUTS(s);
-  }
 }
 
 

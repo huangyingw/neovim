@@ -376,6 +376,7 @@ void pum_redraw(void)
                                 pum_height, grid_width, false, true);
   bool invalid_grid = moved || pum_invalid;
   pum_invalid = false;
+  must_redraw_pum = false;
 
   if (!pum_grid.chars
       || pum_grid.Rows != pum_height || pum_grid.Columns != grid_width) {
@@ -412,7 +413,7 @@ void pum_redraw(void)
     idx = i + pum_first;
     attr = (idx == pum_selected) ? attr_select : attr_norm;
 
-    screen_puts_line_start(row);
+    grid_puts_line_start(&pum_grid, row);
 
     // prepend a space if there is room
     if (extra_space) {
@@ -564,7 +565,7 @@ void pum_redraw(void)
                      ? attr_thumb : attr_scroll);
       }
     }
-    grid_puts_line_flush(&pum_grid, false);
+    grid_puts_line_flush(false);
     row++;
   }
 }
@@ -790,6 +791,7 @@ void pum_undisplay(bool immediate)
 {
   pum_is_visible = false;
   pum_array = NULL;
+  must_redraw_pum = false;
 
   if (immediate) {
     pum_check_clear();
@@ -853,7 +855,8 @@ int pum_get_height(void)
   return pum_height;
 }
 
-void pum_set_boundings(dict_T *dict)
+/// Add size information about the pum to "dict".
+void pum_set_event_info(dict_T *dict)
 {
   if (!pum_visible()) {
     return;

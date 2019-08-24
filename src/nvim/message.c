@@ -116,6 +116,7 @@ static const char *msg_ext_kind = NULL;
 static Array msg_ext_chunks = ARRAY_DICT_INIT;
 static garray_T msg_ext_last_chunk = GA_INIT(sizeof(char), 40);
 static sattr_T msg_ext_last_attr = -1;
+static size_t msg_ext_cur_len = 0;
 
 static bool msg_ext_overwrite = false;  ///< will overwrite last message
 static int msg_ext_visible = 0;  ///< number of messages currently visible
@@ -581,7 +582,23 @@ static bool emsg_multiline(const char *s, bool multiline)
         }
         redir_write(s, strlen(s));
       }
+
+      // Log (silent) errors as debug messages.
+      if (sourcing_name != NULL && sourcing_lnum != 0) {
+        DLOG("(:silent) %s (%s (line %ld))",
+             s, sourcing_name, (long)sourcing_lnum);
+      } else {
+        DLOG("(:silent) %s", s);
+      }
+
       return true;
+    }
+
+    // Log editor errors as INFO.
+    if (sourcing_name != NULL && sourcing_lnum != 0) {
+      ILOG("%s (%s (line %ld))", s, sourcing_name, (long)sourcing_lnum);
+    } else {
+      ILOG("%s", s);
     }
 
     ex_exitval = 1;
@@ -1877,8 +1894,9 @@ static void msg_puts_display(const char_u *str, int maxlen, int attr,
       msg_ext_last_attr = attr;
     }
     // Concat pieces with the same highlight
-    ga_concat_len(&msg_ext_last_chunk, (char *)str,
-                  strnlen((char *)str, maxlen));  // -V781
+    size_t len = strnlen((char *)str, maxlen);             // -V781
+    ga_concat_len(&msg_ext_last_chunk, (char *)str, len);
+    msg_ext_cur_len += len;
     return;
   }
 
@@ -2303,18 +2321,19 @@ int msg_use_printf(void)
 static void msg_puts_printf(const char *str, const ptrdiff_t maxlen)
 {
   const char *s = str;
-  char buf[4];
+  char buf[7];
   char *p;
 
   while ((maxlen < 0 || s - str < maxlen) && *s != NUL) {
+    int len = utf_ptr2len((const char_u *)s);
     if (!(silent_mode && p_verbose == 0)) {
       // NL --> CR NL translation (for Unix, not for "--version")
       p = &buf[0];
       if (*s == '\n' && !info_message) {
         *p++ = '\r';
       }
-      *p++ = *s;
-      *p = '\0';
+      memcpy(p, s, len);
+      *(p + len) = '\0';
       if (info_message) {
         mch_msg(buf);
       } else {
@@ -2322,21 +2341,22 @@ static void msg_puts_printf(const char *str, const ptrdiff_t maxlen)
       }
     }
 
+    int cw = utf_char2cells(utf_ptr2char((const char_u *)s));
     // primitive way to compute the current column
     if (cmdmsg_rl) {
       if (*s == '\r' || *s == '\n') {
         msg_col = Columns - 1;
       } else {
-        msg_col--;
+        msg_col -= cw;
       }
     } else {
       if (*s == '\r' || *s == '\n') {
         msg_col = 0;
       } else {
-        msg_col++;
+        msg_col += cw;
       }
     }
-    s++;
+    s += len;
   }
   msg_didout = true;  // assume that line is not empty
 }
@@ -2552,81 +2572,34 @@ static int do_more_prompt(int typed_char)
   return retval;
 }
 
-#if defined(USE_MCH_ERRMSG)
-
-#ifdef mch_errmsg
-# undef mch_errmsg
-#endif
-#ifdef mch_msg
-# undef mch_msg
-#endif
-
-/*
- * Give an error message.  To be used when the screen hasn't been initialized
- * yet.  When stderr can't be used, collect error messages until the GUI has
- * started and they can be displayed in a message box.
- */
-void mch_errmsg(const char *const str)
-  FUNC_ATTR_NONNULL_ALL
+#if defined(WIN32)
+void mch_errmsg(char *str)
 {
-#ifdef UNIX
-  /* On Unix use stderr if it's a tty.
-   * When not going to start the GUI also use stderr.
-   * On Mac, when started from Finder, stderr is the console. */
-  if (os_isatty(2)) {
-    fprintf(stderr, "%s", str);
-    return;
+  assert(str != NULL);
+  wchar_t *utf16str;
+  int r = utf8_to_utf16(str, -1, &utf16str);
+  if (r != 0) {
+    fprintf(stderr, "utf8_to_utf16 failed: %d", r);
+  } else {
+    fwprintf(stderr, L"%ls", utf16str);
+    xfree(utf16str);
   }
-#endif
-
-  /* avoid a delay for a message that isn't there */
-  emsg_on_display = FALSE;
-
-  const size_t len = strlen(str) + 1;
-  if (error_ga.ga_data == NULL) {
-    ga_set_growsize(&error_ga, 80);
-    error_ga.ga_itemsize = 1;
-  }
-  ga_grow(&error_ga, len);
-  memmove(error_ga.ga_data + error_ga.ga_len, str, len);
-#ifdef UNIX
-  /* remove CR characters, they are displayed */
-  {
-    char_u      *p;
-
-    p = (char_u *)error_ga.ga_data + error_ga.ga_len;
-    for (;; ) {
-      p = vim_strchr(p, '\r');
-      if (p == NULL)
-        break;
-      *p = ' ';
-    }
-  }
-#endif
-  --len;              /* don't count the NUL at the end */
-  error_ga.ga_len += len;
 }
 
-/*
- * Give a message.  To be used when the screen hasn't been initialized yet.
- * When there is no tty, collect messages until the GUI has started and they
- * can be displayed in a message box.
- */
+// Give a message.  To be used when the UI is not initialized yet.
 void mch_msg(char *str)
 {
-#ifdef UNIX
-  /* On Unix use stdout if we have a tty.  This allows "vim -h | more" and
-   * uses mch_errmsg() when started from the desktop.
-   * When not going to start the GUI also use stdout.
-   * On Mac, when started from Finder, stderr is the console. */
-  if (os_isatty(2)) {
-    printf("%s", str);
-    return;
+  assert(str != NULL);
+  wchar_t *utf16str;
+  int r = utf8_to_utf16(str, -1, &utf16str);
+  if (r != 0) {
+    fprintf(stderr, "utf8_to_utf16 failed: %d", r);
+  } else {
+    wprintf(L"%ls", utf16str);
+    xfree(utf16str);
   }
-# endif
-  mch_errmsg(str);
 }
-#endif /* USE_MCH_ERRMSG */
+#endif  // WIN32
 
 /*
  * Put a character on the screen at the current message position and advance
@@ -2770,6 +2743,7 @@ void msg_ext_ui_flush(void)
     }
     msg_ext_kind = NULL;
     msg_ext_chunks = (Array)ARRAY_DICT_INIT;
+    msg_ext_cur_len = 0;
     msg_ext_overwrite = false;
   }
 }
@@ -2782,6 +2756,7 @@ void msg_ext_flush_showmode(void)
     msg_ext_emit_chunk();
     ui_call_msg_showmode(msg_ext_chunks);
     msg_ext_chunks = (Array)ARRAY_DICT_INIT;
+    msg_ext_cur_len = 0;
   }
 }
 
@@ -2988,7 +2963,7 @@ int verbose_open(void)
     /* Only give the error message once. */
     verbose_did_open = TRUE;
 
-    verbose_fd = mch_fopen((char *)p_vfile, "a");
+    verbose_fd = os_fopen((char *)p_vfile, "a");
     if (verbose_fd == NULL) {
       EMSG2(_(e_notopen), p_vfile);
       return FAIL;
@@ -3018,7 +2993,10 @@ void give_warning(char_u *message, bool hl) FUNC_ATTR_NONNULL_ARG(1)
   } else {
     keep_msg_attr = 0;
   }
-  msg_ext_set_kind("wmsg");
+
+  if (msg_ext_kind == NULL) {
+    msg_ext_set_kind("wmsg");
+  }
 
   if (msg_attr((const char *)message, keep_msg_attr) && msg_scrolled == 0) {
     set_keep_msg(message, keep_msg_attr);
@@ -3043,6 +3021,14 @@ void msg_advance(int col)
 {
   if (msg_silent != 0) {        /* nothing to advance to */
     msg_col = col;              /* for redirection, may fill it up later */
+    return;
+  }
+  if (ui_has(kUIMessages)) {
+    // TODO(bfredl): use byte count as a basic proxy.
+    // later on we might add proper support for formatted messages.
+    while (msg_ext_cur_len < (size_t)col) {
+      msg_putchar(' ');
+    }
     return;
   }
   if (col >= Columns)           /* not enough room */

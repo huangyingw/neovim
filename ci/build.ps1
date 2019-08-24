@@ -14,8 +14,10 @@ $depsCmakeVars = @{
 $nvimCmakeVars = @{
   CMAKE_BUILD_TYPE = $cmakeBuildType;
   BUSTED_OUTPUT_TYPE = 'nvim';
-  DEPS_BUILD_DIR=$(if ($env:DEPS_BUILD_DIR -ne $null) {$env:DEPS_BUILD_DIR} else {".deps"});
   DEPS_PREFIX=$(if ($env:DEPS_PREFIX -ne $null) {$env:DEPS_PREFIX} else {".deps/usr"});
+}
+if ($env:DEPS_BUILD_DIR -eq $null) {
+  $env:DEPS_BUILD_DIR = ".deps";
 }
 $uploadToCodeCov = $false
 
@@ -26,11 +28,11 @@ function exitIfFailed() {
   }
 }
 
-if (-Not (Test-Path -PathType container $nvimCmakeVars["DEPS_BUILD_DIR"])) {
-  write-host "cache dir not found: $($nvimCmakeVars['DEPS_BUILD_DIR'])"
-  mkdir $nvimCmakeVars["DEPS_BUILD_DIR"]
+if (-Not (Test-Path -PathType container $env:DEPS_BUILD_DIR)) {
+  write-host "cache dir not found: $($env:DEPS_BUILD_DIR)"
+  mkdir $env:DEPS_BUILD_DIR
 } else {
-  write-host "cache dir $($nvimCmakeVars['DEPS_BUILD_DIR']) size: $(Get-ChildItem $nvimCmakeVars['DEPS_BUILD_DIR'] -recurse | Measure-Object -property length -sum | Select -expand sum)"
+  write-host "cache dir $($env:DEPS_BUILD_DIR) size: $(Get-ChildItem $env:DEPS_BUILD_DIR -recurse | Measure-Object -property length -sum | Select -expand sum)"
 }
 
 if ($compiler -eq 'MINGW') {
@@ -43,13 +45,14 @@ if ($compiler -eq 'MINGW') {
   if ($compileOption -eq 'gcov') {
     $nvimCmakeVars['USE_GCOV'] = 'ON'
     $uploadToCodecov = $true
+    $env:GCOV = "C:\msys64\mingw$bits\bin\gcov"
   }
   # These are native MinGW builds, but they use the toolchain inside
   # MSYS2, this allows using all the dependencies and tools available
   # in MSYS2, but we cannot build inside the MSYS2 shell.
   $cmakeGenerator = 'Ninja'
   $cmakeGeneratorArgs = '-v'
-  $mingwPackages = @('ninja', 'cmake', 'perl', 'diffutils', 'unibilium').ForEach({
+  $mingwPackages = @('ninja', 'cmake', 'perl', 'diffutils').ForEach({
     "mingw-w64-$arch-$_"
   })
 
@@ -95,7 +98,7 @@ function convertToCmakeArgs($vars) {
   return $vars.GetEnumerator() | foreach { "-D$($_.Key)=$($_.Value)" }
 }
 
-cd $nvimCmakeVars["DEPS_BUILD_DIR"]
+cd $env:DEPS_BUILD_DIR
 cmake -G $cmakeGenerator $(convertToCmakeArgs($depsCmakeVars)) "$buildDir/third-party/" ; exitIfFailed
 cmake --build . --config $cmakeBuildType -- $cmakeGeneratorArgs ; exitIfFailed
 cd $buildDir
@@ -105,7 +108,10 @@ mkdir build
 cd build
 cmake -G $cmakeGenerator $(convertToCmakeArgs($nvimCmakeVars)) .. ; exitIfFailed
 cmake --build . --config $cmakeBuildType -- $cmakeGeneratorArgs ; exitIfFailed
-bin\nvim --version ; exitIfFailed
+.\bin\nvim --version ; exitIfFailed
+
+# Ensure that the "win32" feature is set.
+.\bin\nvim -u NONE --headless -c 'exe !has(\"win32\").\"cq\"' ; exitIfFailed
 
 # Functional tests
 # The $LastExitCode from MSBuild can't be trusted
@@ -116,21 +122,28 @@ cmake --build . --config $cmakeBuildType --target functionaltest -- $cmakeGenera
   foreach { $failed = $failed -or
     $_ -match 'functional tests failed with error'; $_ }
 if ($failed) {
+  if ($uploadToCodecov) {
+    bash -l /c/projects/neovim/ci/common/submit_coverage.sh functionaltest
+  }
   exit $LastExitCode
 }
 Set-PSDebug -Strict -Trace 1
 
 
 if ($uploadToCodecov) {
-  C:\msys64\usr\bin\bash -lc "cd /c/projects/neovim; bash <(curl -s https://codecov.io/bash) -c -F functionaltest || echo 'codecov upload failed.'"
+  bash -l /c/projects/neovim/ci/common/submit_coverage.sh functionaltest
 }
 
 # Old tests
+# Add MSYS to path, required for e.g. `find` used in test scripts.
+# But would break functionaltests, where its `more` would be used then.
+$OldPath = $env:PATH
 $env:PATH = "C:\msys64\usr\bin;$env:PATH"
-& "C:\msys64\mingw$bits\bin\mingw32-make.exe" -C $(Convert-Path ..\src\nvim\testdir) VERBOSE=1
+& "C:\msys64\mingw$bits\bin\mingw32-make.exe" -C $(Convert-Path ..\src\nvim\testdir) VERBOSE=1 ; exitIfFailed
+$env:PATH = $OldPath
 
 if ($uploadToCodecov) {
-  C:\msys64\usr\bin\bash -lc "cd /c/projects/neovim; bash <(curl -s https://codecov.io/bash) -c -F oldtest || echo 'codecov upload failed.'"
+  bash -l /c/projects/neovim/ci/common/submit_coverage.sh oldtest
 }
 
 # Build artifacts

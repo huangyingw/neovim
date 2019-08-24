@@ -247,9 +247,9 @@
 
 #define BRACE_COMPLEX   140 /* -149 node Match nodes between m & n times */
 
-#define NOPEN           150     /*	Mark this point in input as start of
-                                 \%( subexpr. */
-#define NCLOSE          151     /*	Analogous to NOPEN. */
+#define NOPEN           150     // Mark this point in input as start of
+                                // \%( subexpr.
+#define NCLOSE          151     // Analogous to NOPEN.
 
 #define MULTIBYTECODE   200     /* mbc	Match one multi-byte character */
 #define RE_BOF          201     /*	Match "" at beginning of file. */
@@ -348,13 +348,13 @@ typedef enum regstate_E {
  * more things.
  */
 typedef struct regitem_S {
-  regstate_T rs_state;          /* what we are doing, one of RS_ above */
-  char_u      *rs_scan;         /* current node in program */
+  regstate_T rs_state;          // what we are doing, one of RS_ above
+  uint16_t   rs_no;             // submatch nr or BEHIND/NOBEHIND
+  char_u     *rs_scan;          // current node in program
   union {
     save_se_T sesave;
     regsave_T regsave;
-  } rs_un;                      /* room for saving reginput */
-  short rs_no;                  /* submatch nr or BEHIND/NOBEHIND */
+  } rs_un;                      // room for saving reginput
 } regitem_T;
 
 
@@ -2058,10 +2058,14 @@ static char_u *regatom(int *flagp)
             EMSG2_RET_NULL(_(e_missing_sb),
                 reg_magic == MAGIC_ALL);
           br = regnode(BRANCH);
-          if (ret == NULL)
+          if (ret == NULL) {
             ret = br;
-          else
+          } else {
             regtail(lastnode, br);
+            if (reg_toolong) {
+              return NULL;
+            }
+          }
 
           ungetchr();
           one_exactly = TRUE;
@@ -2083,6 +2087,9 @@ static char_u *regatom(int *flagp)
           for (br = ret; br != lastnode; ) {
             if (OP(br) == BRANCH) {
               regtail(br, lastbranch);
+              if (reg_toolong) {
+                return NULL;
+              }
               br = OPERAND(br);
             } else
               br = regnext(br);
@@ -4316,8 +4323,10 @@ static int regmatch(
             /* Still at same position as last time, fail. */
             status = RA_NOMATCH;
 
-          if (status != RA_FAIL && status != RA_NOMATCH)
+          assert(status != RA_FAIL);
+          if (status != RA_NOMATCH) {
             reg_save(&bp[i].bp_pos, &backpos);
+          }
         }
         break;
 

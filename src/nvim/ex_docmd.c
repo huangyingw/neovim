@@ -16,6 +16,7 @@
 #include "nvim/ascii.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/buffer.h"
+#include "nvim/change.h"
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
 #include "nvim/diff.h"
@@ -1108,9 +1109,8 @@ static int current_tab_nr(tabpage_T *tab)
 #define CURRENT_TAB_NR current_tab_nr(curtab)
 #define LAST_TAB_NR current_tab_nr(NULL)
 
-/*
-* Figure out the address type for ":wincmd".
-*/
+
+/// Figure out the address type for ":wincmd".
 static void get_wincmd_addr_type(char_u *arg, exarg_T *eap)
 {
   switch (*arg) {
@@ -1156,13 +1156,13 @@ static void get_wincmd_addr_type(char_u *arg, exarg_T *eap)
     case Ctrl_I:
     case 'd':
     case Ctrl_D:
-      /* window size or any count */
-      eap->addr_type = ADDR_LINES;
+      // window size or any count
+      eap->addr_type = ADDR_LINES;     // -V1037
       break;
 
     case Ctrl_HAT:
     case '^':
-      /* buffer number */
+      // buffer number
       eap->addr_type = ADDR_BUFFERS;
       break;
 
@@ -1177,7 +1177,7 @@ static void get_wincmd_addr_type(char_u *arg, exarg_T *eap)
     case 'W':
     case 'x':
     case Ctrl_X:
-      /* window number */
+      // window number
       eap->addr_type = ADDR_WINDOWS;
       break;
 
@@ -1192,7 +1192,7 @@ static void get_wincmd_addr_type(char_u *arg, exarg_T *eap)
     case Ctrl_P:
     case '=':
     case CAR:
-      /* no count */
+      // no count
       eap->addr_type = 0;
       break;
   }
@@ -2452,7 +2452,7 @@ static char_u *find_command(exarg_T *eap, int *full)
 
     if (ASCII_ISLOWER(eap->cmd[0])) {
       const int c1 = eap->cmd[0];
-      const int c2 = eap->cmd[1];
+      const int c2 = len == 1 ? NUL : eap->cmd[1];
 
       if (command_count != (int)CMD_SIZE) {
         iemsg((char *)_("E943: Command table needs to be updated, run 'make'"));
@@ -2503,10 +2503,10 @@ static char_u *find_command(exarg_T *eap, int *full)
 static char_u *
 find_ucmd (
     exarg_T *eap,
-    char_u *p,         /* end of the command (possibly including count) */
-    int *full,      /* set to TRUE for a full match */
-    expand_T *xp,        /* used for completion, NULL otherwise */
-    int *compl     /* completion flags or NULL */
+    char_u *p,      // end of the command (possibly including count)
+    int *full,      // set to TRUE for a full match
+    expand_T *xp,   // used for completion, NULL otherwise
+    int *complp     // completion flags or NULL
 )
 {
   int len = (int)(p - eap->cmd);
@@ -2559,8 +2559,9 @@ find_ucmd (
           eap->useridx = j;
           eap->addr_type = uc->uc_addr_type;
 
-          if (compl != NULL)
-            *compl = uc->uc_compl;
+          if (complp != NULL) {
+            *complp = uc->uc_compl;
+          }
           if (xp != NULL) {
             xp->xp_arg = uc->uc_compl_arg;
             xp->xp_scriptID = uc->uc_scriptID;
@@ -4060,10 +4061,9 @@ static char_u *replace_makeprg(exarg_T *eap, char_u *p, char_u **cmdlinep)
   return p;
 }
 
-/*
- * Expand file name in Ex command argument.
- * Return FAIL for failure, OK otherwise.
- */
+// Expand file name in Ex command argument.
+// When an error is detected, "errormsgp" is set to a non-NULL pointer.
+// Return FAIL for failure, OK otherwise.
 int expand_filename(exarg_T *eap, char_u **cmdlinep, char_u **errormsgp)
 {
   int has_wildcards;            /* need to expand wildcards */
@@ -4614,7 +4614,7 @@ static void ex_doautocmd(exarg_T *eap)
   int call_do_modelines = check_nomodeline(&arg);
   bool did_aucmd;
 
-  (void)do_doautocmd(arg, true, &did_aucmd);
+  (void)do_doautocmd(arg, false, &did_aucmd);
   // Only when there is no <nomodeline>.
   if (call_do_modelines && did_aucmd) {
     do_modelines(0);
@@ -5088,7 +5088,7 @@ static void uc_list(char_u *name, size_t name_len)
 }
 
 static int uc_scan_attr(char_u *attr, size_t len, uint32_t *argt, long *def,
-                        int *flags, int * compl, char_u **compl_arg,
+                        int *flags, int *complp, char_u **compl_arg,
                         int *addr_type_arg)
 {
   char_u      *p;
@@ -5185,9 +5185,10 @@ invalid_count:
         return FAIL;
       }
 
-      if (parse_compl_arg(val, (int)vallen, compl, argt, compl_arg)
-          == FAIL)
+      if (parse_compl_arg(val, (int)vallen, complp, argt, compl_arg)
+          == FAIL) {
         return FAIL;
+      }
     } else if (STRNICMP(attr, "addr", attrlen) == 0) {
       *argt |= RANGE;
       if (val == NULL) {
@@ -5265,8 +5266,7 @@ static void ex_command(exarg_T *eap)
   } else if (!ASCII_ISUPPER(*name)) {
     EMSG(_("E183: User defined commands must start with an uppercase letter"));
     return;
-  } else if ((name_len == 1 && *name == 'X')
-             || (name_len <= 4 && STRNCMP(name, "Next", name_len) == 0)) {
+  } else if (name_len <= 4 && STRNCMP(name, "Next", name_len) == 0) {
     EMSG(_("E841: Reserved name, cannot be used for user defined command"));
     return;
   } else {
@@ -6018,7 +6018,7 @@ static void ex_highlight(exarg_T *eap)
  */
 void not_exiting(void)
 {
-  exiting = FALSE;
+  exiting = false;
 }
 
 static bool before_quit_autocmds(win_T *wp, bool quit_all, int forceit)
@@ -6216,7 +6216,7 @@ ex_win_close(
       }
       need_hide = false;
     } else {
-      EMSG(_(e_nowrtmsg));
+      no_write_message();
       return;
     }
   }
@@ -6418,7 +6418,7 @@ static void ex_stop(exarg_T *eap)
     apply_autocmds(EVENT_VIMSUSPEND, NULL, NULL, false, NULL);
 
     // TODO(bfredl): the TUI should do this on suspend
-    ui_cursor_goto((int)Rows - 1, 0);
+    ui_cursor_goto(Rows - 1, 0);
     ui_call_grid_scroll(1, 0, Rows, 0, Columns, 1, 0);
     ui_flush();
     ui_call_suspend();  // call machine specific function
@@ -6762,8 +6762,9 @@ void ex_splitview(exarg_T *eap)
     if (*eap->arg != NUL
         ) {
       RESET_BINDING(curwin);
-    } else
-      do_check_scrollbind(FALSE);
+    } else {
+      do_check_scrollbind(false);
+    }
     do_exedit(eap, old_curwin);
   }
 
@@ -6922,16 +6923,17 @@ static void ex_resize(exarg_T *eap)
 
   n = atol((char *)eap->arg);
   if (cmdmod.split & WSP_VERT) {
-    if (*eap->arg == '-' || *eap->arg == '+')
+    if (*eap->arg == '-' || *eap->arg == '+') {
       n += curwin->w_width;
-    else if (n == 0 && eap->arg[0] == NUL)      /* default is very wide */
-      n = 9999;
+    } else if (n == 0 && eap->arg[0] == NUL) {  // default is very wide
+      n = Columns;
+    }
     win_setwidth_win(n, wp);
   } else {
     if (*eap->arg == '-' || *eap->arg == '+') {
       n += curwin->w_height;
     } else if (n == 0 && eap->arg[0] == NUL) {  // default is very high
-      n = 9999;
+      n = Rows-1;
     }
     win_setheight_win(n, wp);
   }
@@ -7520,7 +7522,7 @@ static void ex_operators(exarg_T *eap)
 
   case CMD_yank:
     oa.op_type = OP_YANK;
-    (void)op_yank(&oa, true);
+    (void)op_yank(&oa, true, false);
     break;
 
   default:          /* CMD_rshift or CMD_lshift */
@@ -7874,6 +7876,22 @@ static void ex_redrawstatus(exarg_T *eap)
   ui_flush();
 }
 
+// ":redrawtabline": force redraw of the tabline
+static void ex_redrawtabline(exarg_T *eap FUNC_ATTR_UNUSED)
+{
+  const int r = RedrawingDisabled;
+  const int p = p_lz;
+
+  RedrawingDisabled = 0;
+  p_lz = false;
+
+  draw_tabline();
+
+  RedrawingDisabled = r;
+  p_lz = p;
+  ui_flush();
+}
+
 static void close_redir(void)
 {
   if (redir_fd != NULL) {
@@ -8090,8 +8108,9 @@ open_exfile (
     return NULL;
   }
 
-  if ((fd = mch_fopen((char *)fname, mode)) == NULL)
+  if ((fd = os_fopen((char *)fname, mode)) == NULL) {
     EMSG2(_("E190: Cannot open \"%s\" for writing"), fname);
+  }
 
   return fd;
 }
@@ -8412,13 +8431,15 @@ static void ex_pedit(exarg_T *eap)
 {
   win_T       *curwin_save = curwin;
 
+  // Open the preview window or popup and make it the current window.
   g_do_tagpreview = p_pvh;
   prepare_tagpreview(true);
-  keep_help_flag = bt_help(curwin_save->w_buffer);
+
+  // Edit the file.
   do_exedit(eap, NULL);
-  keep_help_flag = FALSE;
+
   if (curwin != curwin_save && win_valid(curwin_save)) {
-    /* Return cursor to where we were */
+    // Return cursor to where we were
     validate_cursor();
     redraw_later(VALID);
     win_enter(curwin_save, true);
@@ -8452,24 +8473,23 @@ static void ex_tag_cmd(exarg_T *eap, char_u *name)
   int cmd;
 
   switch (name[1]) {
-  case 'j': cmd = DT_JUMP;              /* ":tjump" */
+  case 'j': cmd = DT_JUMP;              // ":tjump"
     break;
-  case 's': cmd = DT_SELECT;            /* ":tselect" */
+  case 's': cmd = DT_SELECT;            // ":tselect"
     break;
-  case 'p': cmd = DT_PREV;              /* ":tprevious" */
+  case 'p':                             // ":tprevious"
+  case 'N': cmd = DT_PREV;              // ":tNext"
     break;
-  case 'N': cmd = DT_PREV;              /* ":tNext" */
+  case 'n': cmd = DT_NEXT;              // ":tnext"
     break;
-  case 'n': cmd = DT_NEXT;              /* ":tnext" */
+  case 'o': cmd = DT_POP;               // ":pop"
     break;
-  case 'o': cmd = DT_POP;               /* ":pop" */
+  case 'f':                             // ":tfirst"
+  case 'r': cmd = DT_FIRST;             // ":trewind"
     break;
-  case 'f':                             /* ":tfirst" */
-  case 'r': cmd = DT_FIRST;             /* ":trewind" */
+  case 'l': cmd = DT_LAST;              // ":tlast"
     break;
-  case 'l': cmd = DT_LAST;              /* ":tlast" */
-    break;
-  default:                              /* ":tag" */
+  default:                              // ":tag"
     if (p_cst && *eap->arg != NUL) {
       ex_cstag(eap);
       return;
@@ -9162,7 +9182,7 @@ makeopens(
 
     // Take care of tab-local working directories if applicable
     if (tp->tp_localdir) {
-      if (fputs("if has('nvim') | tcd ", fd) < 0
+      if (fputs("if exists(':tcd') == 2 | tcd ", fd) < 0
           || ses_put_fname(fd, tp->tp_localdir, &ssop_flags) == FAIL
           || fputs(" | endif", fd) < 0
           || put_eol(fd) == FAIL) {
@@ -9322,26 +9342,30 @@ static frame_T *ses_skipframe(frame_T *fr)
 {
   frame_T     *frc;
 
-  for (frc = fr; frc != NULL; frc = frc->fr_next)
-    if (ses_do_frame(frc))
+  FOR_ALL_FRAMES(frc, fr) {
+    if (ses_do_frame(frc)) {
       break;
+    }
+  }
   return frc;
 }
 
-/*
- * Return TRUE if frame "fr" has a window somewhere that we want to save in
- * the Session.
- */
-static int ses_do_frame(frame_T *fr)
+// Return true if frame "fr" has a window somewhere that we want to save in
+// the Session.
+static bool ses_do_frame(const frame_T *fr)
+  FUNC_ATTR_NONNULL_ARG(1)
 {
-  frame_T     *frc;
+  const frame_T *frc;
 
-  if (fr->fr_layout == FR_LEAF)
+  if (fr->fr_layout == FR_LEAF) {
     return ses_do_win(fr->fr_win);
-  for (frc = fr->fr_child; frc != NULL; frc = frc->fr_next)
-    if (ses_do_frame(frc))
-      return TRUE;
-  return FALSE;
+  }
+  FOR_ALL_FRAMES(frc, fr->fr_child) {
+    if (ses_do_frame(frc)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /// Return non-zero if window "wp" is to be stored in the Session.
@@ -9584,7 +9608,7 @@ ses_arglist(
   if (fputs(cmd, fd) < 0 || put_eol(fd) == FAIL) {
     return FAIL;
   }
-  if (put_line(fd, "silent! argdel *") == FAIL) {
+  if (put_line(fd, "%argdel") == FAIL) {
     return FAIL;
   }
   for (int i = 0; i < gap->ga_len; ++i) {
@@ -10153,7 +10177,7 @@ Dictionary commands_array(buf_T *buf)
   Dictionary rv = ARRAY_DICT_INIT;
   Object obj = NIL;
   (void)obj;  // Avoid "dead assignment" warning.
-  char str[10];
+  char str[20];
   garray_T *gap = (buf == NULL) ? &ucmds : &buf->b_ucmds;
 
   for (int i = 0; i < gap->ga_len; i++) {

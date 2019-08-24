@@ -18,6 +18,7 @@
 #endif
 #include "nvim/ex_cmds2.h"
 #include "nvim/buffer.h"
+#include "nvim/change.h"
 #include "nvim/charset.h"
 #include "nvim/eval.h"
 #include "nvim/ex_cmds.h"
@@ -43,6 +44,7 @@
 #include "nvim/screen.h"
 #include "nvim/strings.h"
 #include "nvim/undo.h"
+#include "nvim/version.h"
 #include "nvim/window.h"
 #include "nvim/profile.h"
 #include "nvim/os/os.h"
@@ -611,7 +613,7 @@ static int dbg_parsearg(char_u *arg, garray_T *gap)
   return OK;
 }
 
-/// ":breakadd".
+/// ":breakadd".  Also used for ":profile".
 void ex_breakadd(exarg_T *eap)
 {
   struct debuggy *bp;
@@ -989,7 +991,7 @@ void profile_dump(void)
   FILE        *fd;
 
   if (profile_fname != NULL) {
-    fd = mch_fopen((char *)profile_fname, "w");
+    fd = os_fopen((char *)profile_fname, "w");
     if (fd == NULL) {
       EMSG2(_(e_notopen), profile_fname);
     } else {
@@ -1138,7 +1140,7 @@ static void script_dump_profile(FILE *fd)
       fprintf(fd, "\n");
       fprintf(fd, "count  total (s)   self (s)\n");
 
-      sfd = mch_fopen((char *)si->sn_name, "r");
+      sfd = os_fopen((char *)si->sn_name, "r");
       if (sfd == NULL) {
         fprintf(fd, "Cannot open file!\n");
       } else {
@@ -1274,9 +1276,9 @@ bool check_changed(buf_T *buf, int flags)
       return bufIsChanged(buf);
     }
     if (flags & CCGD_EXCMD) {
-      EMSG(_(e_nowrtmsg));
+      no_write_message();
     } else {
-      EMSG(_(e_nowrtmsg_nobang));
+      no_write_message_nobang();
     }
     return true;
   }
@@ -1791,19 +1793,15 @@ void ex_args(exarg_T *eap)
   } else if (eap->cmdidx == CMD_args) {
     // ":args": list arguments.
     if (ARGCOUNT > 0) {
+      char_u **items = xmalloc(sizeof(char_u *) * (size_t)ARGCOUNT);
       // Overwrite the command, for a short list there is no scrolling
       // required and no wait_return().
       gotocmdline(true);
       for (int i = 0; i < ARGCOUNT; i++) {
-        if (i == curwin->w_arg_idx) {
-          msg_putchar('[');
-        }
-        msg_outtrans(alist_name(&ARGLIST[i]));
-        if (i == curwin->w_arg_idx) {
-          msg_putchar(']');
-        }
-        msg_putchar(' ');
+        items[i] = alist_name(&ARGLIST[i]);
       }
+      list_in_columns(items, ARGCOUNT, curwin->w_arg_idx);
+      xfree(items);
     }
   } else if (eap->cmdidx == CMD_arglocal) {
     garray_T        *gap = &curwin->w_alist->al_ga;
@@ -2821,10 +2819,10 @@ void ex_packadd(exarg_T *eap)
 /// ":options"
 void ex_options(exarg_T *eap)
 {
-  vim_setenv("OPTWIN_CMD", cmdmod.tab ? "tab" : "");
-  vim_setenv("OPTWIN_CMD",
-             cmdmod.tab ? "tab" :
-             (cmdmod.split & WSP_VERT) ? "vert" : "");
+  os_setenv("OPTWIN_CMD", cmdmod.tab ? "tab" : "", 1);
+  os_setenv("OPTWIN_CMD",
+            cmdmod.tab ? "tab" :
+            (cmdmod.split & WSP_VERT) ? "vert" : "", 1);
   cmd_source((char_u *)SYS_OPTWIN_FILE, NULL);
 }
 
@@ -2832,9 +2830,9 @@ void ex_options(exarg_T *eap)
 void init_pyxversion(void)
 {
   if (p_pyx == 0) {
-    if (!eval_has_provider("python3")) {
+    if (eval_has_provider("python3")) {
       p_pyx = 3;
-    } else if (!eval_has_provider("python")) {
+    } else if (eval_has_provider("python")) {
       p_pyx = 2;
     }
   }
@@ -2858,7 +2856,7 @@ static int requires_py_version(char_u *filename)
     lines = 5;
   }
 
-  file = mch_fopen((char *)filename, "r");
+  file = os_fopen((char *)filename, "r");
   if (file != NULL) {
     for (i = 0; i < lines; i++) {
       if (vim_fgets(IObuff, IOSIZE, file)) {
@@ -3039,6 +3037,7 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
   int save_debug_break_level = debug_break_level;
   scriptitem_T            *si = NULL;
   proftime_T wait_start;
+  bool trigger_source_post = false;
 
   p = expand_env_save(fname);
   if (p == NULL) {
@@ -3059,6 +3058,10 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
       && apply_autocmds(EVENT_SOURCECMD, fname_exp, fname_exp,
                         false, curbuf)) {
     retval = aborting() ? FAIL : OK;
+    if (retval == OK) {
+      // Apply SourcePost autocommands.
+      apply_autocmds(EVENT_SOURCEPOST, fname_exp, fname_exp, false, curbuf);
+    }
     goto theend;
   }
 
@@ -3181,7 +3184,7 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
     }
     si = &SCRIPT_ITEM(current_SID);
     si->sn_name = fname_exp;
-    fname_exp = NULL;
+    fname_exp = vim_strsave(si->sn_name);  // used for autocmd
     if (file_id_ok) {
       si->file_id_valid = true;
       si->file_id = file_id;
@@ -3261,6 +3264,10 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
     time_pop(rel_time);
   }
 
+  if (!got_int) {
+    trigger_source_post = true;
+  }
+
   // After a "finish" in debug mode, need to break at first command of next
   // sourced file.
   if (save_debug_break_level > ex_nesting_level
@@ -3277,6 +3284,10 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
   xfree(cookie.nextline);
   xfree(firstline);
   convert_setup(&cookie.conv, NULL, NULL);
+
+  if (trigger_source_post) {
+    apply_autocmds(EVENT_SOURCEPOST, fname_exp, fname_exp, false, curbuf);
+  }
 
 theend:
   xfree(fname_exp);
@@ -3916,19 +3927,19 @@ void ex_language(exarg_T *eap)
       _nl_msg_cat_cntr++;
 #endif
       // Reset $LC_ALL, otherwise it would overrule everything.
-      vim_setenv("LC_ALL", "");
+      os_setenv("LC_ALL", "", 1);
 
       if (what != LC_TIME) {
         // Tell gettext() what to translate to.  It apparently doesn't
         // use the currently effective locale.
         if (what == LC_ALL) {
-          vim_setenv("LANG", (char *)name);
+          os_setenv("LANG", (char *)name, 1);
 
           // Clear $LANGUAGE because GNU gettext uses it.
-          vim_setenv("LANGUAGE", "");
+          os_setenv("LANGUAGE", "", 1);
         }
         if (what != LC_CTYPE) {
-          vim_setenv("LC_MESSAGES", (char *)name);
+          os_setenv("LC_MESSAGES", (char *)name, 1);
           set_helplang_default((char *)name);
         }
       }

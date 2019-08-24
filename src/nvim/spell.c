@@ -84,6 +84,7 @@
 #include "nvim/ascii.h"
 #include "nvim/spell.h"
 #include "nvim/buffer.h"
+#include "nvim/change.h"
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
 #include "nvim/edit.h"
@@ -1626,7 +1627,7 @@ static void spell_load_lang(char_u *lang)
     if (starting) {
       // Prompt the user at VimEnter if spell files are missing. #3027
       // Plugins aren't loaded yet, so spellfile.vim cannot handle this case.
-      char autocmd_buf[128] = { 0 };
+      char autocmd_buf[512] = { 0 };
       snprintf(autocmd_buf, sizeof(autocmd_buf),
                "autocmd VimEnter * call spellfile#LoadFile('%s')|set spell",
                lang);
@@ -1807,9 +1808,11 @@ void count_common_word(slang_T *lp, char_u *word, int len, int count)
   char_u buf[MAXWLEN];
   char_u      *p;
 
-  if (len == -1)
+  if (len == -1) {
     p = word;
-  else {
+  } else if (len >= MAXWLEN) {
+    return;
+  } else {
     STRLCPY(buf, word, len + 1);
     p = buf;
   }
@@ -2616,7 +2619,7 @@ static bool spell_mb_isword_class(int cl, win_T *wp)
   if (wp->w_s->b_cjk)
     // East Asian characters are not considered word characters.
     return cl == 2 || cl == 0x2800;
-  return cl >= 2 && cl != 0x2070 && cl != 0x2080;
+  return cl >= 2 && cl != 0x2070 && cl != 0x2080 && cl != 3;
 }
 
 // Returns true if "p" points to a word character.
@@ -3262,7 +3265,7 @@ static void spell_suggest_file(suginfo_T *su, char_u *fname)
   char_u cword[MAXWLEN];
 
   // Open the file.
-  fd = mch_fopen((char *)fname, "r");
+  fd = os_fopen((char *)fname, "r");
   if (fd == NULL) {
     EMSG2(_(e_notopen), fname);
     return;
@@ -4500,7 +4503,7 @@ static void suggest_trie_walk(suginfo_T *su, langp_T *lp, char_u *fword, bool so
         sp->ts_state = STATE_SWAP3;
         break;
       }
-      if (c2 != NUL && TRY_DEEPER(su, stack, depth, SCORE_SWAP)) {
+      if (TRY_DEEPER(su, stack, depth, SCORE_SWAP)) {
         go_deeper(stack, depth, SCORE_SWAP);
 #ifdef DEBUG_TRIEWALK
         snprintf(changename[depth], sizeof(changename[0]),
@@ -5283,7 +5286,7 @@ add_sound_suggest (
   }
 
   // Go over the list of good words that produce this soundfold word
-  nrline = ml_get_buf(slang->sl_sugbuf, (linenr_T)(sfwordnr + 1), FALSE);
+  nrline = ml_get_buf(slang->sl_sugbuf, (linenr_T)sfwordnr + 1, false);
   orgnr = 0;
   while (*nrline != NUL) {
     // The wordnr was stored in a minimal nr of bytes as an offset to the
@@ -7329,7 +7332,7 @@ static void dump_word(slang_T *slang, char_u *word, char_u *pat, int *dir, int d
               ? mb_strnicmp(p, pat, STRLEN(pat)) == 0
               : STRNCMP(p, pat, STRLEN(pat)) == 0)
              && ins_compl_add_infercase(p, (int)STRLEN(p),
-                                        p_ic, NULL, *dir, 0) == OK) {
+                                        p_ic, NULL, *dir, false) == OK) {
     // if dir was BACKWARD then honor it just once
     *dir = FORWARD;
   }

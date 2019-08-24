@@ -252,6 +252,8 @@ typedef struct {
 # define w_p_fcs w_onebuf_opt.wo_fcs    // 'fillchars'
   char_u *wo_lcs;
 # define w_p_lcs w_onebuf_opt.wo_lcs    // 'listchars'
+  long wo_winbl;
+# define w_p_winbl w_onebuf_opt.wo_winbl  // 'winblend'
 
   LastSet wo_scriptID[WV_COUNT];        // SIDs for window-local options
 # define w_p_scriptID w_onebuf_opt.wo_scriptID
@@ -456,8 +458,10 @@ typedef TV_DICTITEM_STRUCT(sizeof("changedtick")) ChangedtickDictItem;
 typedef struct {
   LuaRef on_lines;
   LuaRef on_changedtick;
+  LuaRef on_detach;
+  bool utf_sizes;
 } BufUpdateCallbacks;
-#define BUF_UPDATE_CALLBACKS_INIT { LUA_NOREF, LUA_NOREF }
+#define BUF_UPDATE_CALLBACKS_INIT { LUA_NOREF, LUA_NOREF, LUA_NOREF, false }
 
 #define BUF_HAS_QF_ENTRY 1
 #define BUF_HAS_LL_ENTRY 2
@@ -504,9 +508,9 @@ struct file_buffer {
   int b_changed;                // 'modified': Set to true if something in the
                                 // file has been changed and not written out.
 
-  /// Change identifier incremented for each change, including undo
+  /// Change-identifier incremented for each change, including undo.
   ///
-  /// This is a dictionary item used to store in b:changedtick.
+  /// This is a dictionary item used to store b:changedtick.
   ChangedtickDictItem changedtick_di;
 
   varnumber_T b_last_changedtick;       // b:changedtick when TextChanged or
@@ -799,10 +803,25 @@ struct file_buffer {
 
   kvec_t(BufhlLine *) b_bufhl_move_space;  // temporary space for highlights
 
-  // array of channelids which have asked to receive updates for this
+  // array of channel_id:s which have asked to receive updates for this
   // buffer.
   kvec_t(uint64_t) update_channels;
+  // array of lua callbacks for buffer updates.
   kvec_t(BufUpdateCallbacks) update_callbacks;
+
+  // whether an update callback has requested codepoint size of deleted regions.
+  bool update_need_codepoints;
+
+  // Measurements of the deleted or replaced region since the last update
+  // event. Some consumers of buffer changes need to know the byte size (like
+  // tree-sitter) or the corresponding UTF-32/UTF-16 size (like LSP) of the
+  // deleted text.
+  size_t deleted_bytes;
+  size_t deleted_codepoints;
+  size_t deleted_codeunits;
+
+  // The number for times the current line has been flushed in the memline.
+  int flush_count;
 
   int b_diff_failed;    // internal diff failed for this buffer
 };
@@ -969,7 +988,6 @@ struct matchitem {
 };
 
 typedef int FloatAnchor;
-typedef int FloatRelative;
 
 enum {
   kFloatAnchorEast  = 1,
@@ -982,14 +1000,19 @@ enum {
 // SE -> kFloatAnchorSouth | kFloatAnchorEast
 EXTERN const char *const float_anchor_str[] INIT(= { "NW", "NE", "SW", "SE" });
 
-enum {
+typedef enum {
   kFloatRelativeEditor = 0,
   kFloatRelativeWindow = 1,
   kFloatRelativeCursor = 2,
-};
+} FloatRelative;
 
 EXTERN const char *const float_relative_str[] INIT(= { "editor", "window",
                                                        "cursor" });
+
+typedef enum {
+  kWinStyleUnused = 0,
+  kWinStyleMinimal,  /// Minimal UI: no number column, eob markers, etc
+} WinStyle;
 
 typedef struct {
   Window window;
@@ -999,12 +1022,14 @@ typedef struct {
   FloatRelative relative;
   bool external;
   bool focusable;
+  WinStyle style;
 } FloatConfig;
 
 #define FLOAT_CONFIG_INIT ((FloatConfig){ .height = 0, .width = 0, \
                                           .row = 0, .col = 0, .anchor = 0, \
                                           .relative = 0, .external = false, \
-                                          .focusable = true })
+                                          .focusable = true, \
+                                          .style = kWinStyleUnused })
 
 // Structure to store last cursor position and topline.  Used by check_lnums()
 // and reset_lnums().

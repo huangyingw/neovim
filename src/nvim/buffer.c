@@ -29,8 +29,10 @@
 #include "nvim/api/vim.h"
 #include "nvim/ascii.h"
 #include "nvim/assert.h"
+#include "nvim/channel.h"
 #include "nvim/vim.h"
 #include "nvim/buffer.h"
+#include "nvim/change.h"
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
 #include "nvim/diff.h"
@@ -94,6 +96,11 @@ static char *e_auabort = N_("E855: Autocommands caused command to abort");
 
 // Number of times free_buffer() was called.
 static int buf_free_count = 0;
+
+typedef enum {
+  kBffClearWinInfo = 1,
+  kBffInitChangedtick = 2,
+} BufFreeFlags;
 
 // Read data from buffer for retrying.
 static int
@@ -617,9 +624,9 @@ void close_buffer(win_T *win, buf_T *buf, int action, int abort_if_last)
     free_buffer(buf);
   } else {
     if (del_buf) {
-      /* Free all internal variables and reset option values, to make
-       * ":bdel" compatible with Vim 5.7. */
-      free_buffer_stuff(buf, true);
+      // Free all internal variables and reset option values, to make
+      // ":bdel" compatible with Vim 5.7.
+      free_buffer_stuff(buf, kBffClearWinInfo | kBffInitChangedtick);
 
       // Make it look like a new buffer.
       buf->b_flags = BF_CHECK_RO | BF_NEVERLOADED;
@@ -754,7 +761,12 @@ static void free_buffer(buf_T *buf)
 {
   handle_unregister_buffer(buf);
   buf_free_count++;
-  free_buffer_stuff(buf, true);
+  // b:changedtick uses an item in buf_T.
+  free_buffer_stuff(buf, kBffClearWinInfo);
+  if (buf->b_vars->dv_refcount > DO_NOT_FREE_CNT) {
+    tv_dict_add(buf->b_vars,
+                tv_dict_item_copy((dictitem_T *)(&buf->changedtick_di)));
+  }
   unref_var_dict(buf->b_vars);
   aubuflocal_remove(buf);
   tv_dict_unref(buf->additional_data);
@@ -779,22 +791,19 @@ static void free_buffer(buf_T *buf)
   }
 }
 
-/*
- * Free stuff in the buffer for ":bdel" and when wiping out the buffer.
- */
-static void
-free_buffer_stuff(
-    buf_T *buf,
-    int free_options                       // free options as well
-)
+/// Free stuff in the buffer for ":bdel" and when wiping out the buffer.
+///
+/// @param buf  Buffer pointer
+/// @param free_flags  BufFreeFlags
+static void free_buffer_stuff(buf_T *buf, int free_flags)
 {
-  if (free_options) {
+  if (free_flags & kBffClearWinInfo) {
     clear_wininfo(buf);                 // including window-local options
     free_buf_options(buf, true);
     ga_clear(&buf->b_s.b_langp);
   }
   {
-    // Avoid loosing b:changedtick when deleting buffer: clearing variables
+    // Avoid losing b:changedtick when deleting buffer: clearing variables
     // implies using clear_tv() on b:changedtick and that sets changedtick to
     // zero.
     hashitem_T *const changedtick_hi = hash_find(
@@ -804,7 +813,9 @@ free_buffer_stuff(
   }
   vars_clear(&buf->b_vars->dv_hashtab);   // free all internal variables
   hash_init(&buf->b_vars->dv_hashtab);
-  buf_init_changedtick(buf);
+  if (free_flags & kBffInitChangedtick) {
+    buf_init_changedtick(buf);
+  }
   uc_clear(&buf->b_ucmds);               // clear local user commands
   buf_delete_signs(buf, (char_u *)"*");  // delete any signs
   bufhl_clear_all(buf);                  // delete any highligts
@@ -1425,7 +1436,7 @@ do_buffer(
       }
     }
     if (bufIsChanged(curbuf)) {
-      EMSG(_(e_nowrtmsg));
+      no_write_message();
       return FAIL;
     }
   }
@@ -1626,6 +1637,16 @@ void do_autochdir(void)
   }
 }
 
+void no_write_message(void)
+{
+  EMSG(_("E37: No write since last change (add ! to override)"));
+}
+
+void no_write_message_nobang(void)
+{
+  EMSG(_("E37: No write since last change"));
+}
+
 //
 // functions for dealing with the buffer list
 //
@@ -1773,7 +1794,7 @@ buf_T * buflist_new(char_u *ffname, char_u *sfname, linenr_T lnum, int flags)
     if (aborting()) {           // autocmds may abort script processing
       return NULL;
     }
-    free_buffer_stuff(buf, false);      // delete local variables et al.
+    free_buffer_stuff(buf, kBffInitChangedtick);  // delete local vars et al.
 
     // Init the options.
     buf->b_p_initialized = false;
@@ -2532,6 +2553,11 @@ void get_winopts(buf_T *buf)
   } else
     copy_winopt(&curwin->w_allbuf_opt, &curwin->w_onebuf_opt);
 
+  if (curwin->w_float_config.style == kWinStyleMinimal) {
+    didset_window_options(curwin);
+    win_set_minimal_style(curwin);
+  }
+
   // Set 'foldlevel' to 'foldlevelstart' if it's not negative.
   if (p_fdls >= 0) {
     curwin->w_p_fdl = p_fdls;
@@ -2595,14 +2621,23 @@ void buflist_list(exarg_T *eap)
       continue;
     }
 
+    const int changed_char = (buf->b_flags & BF_READERR)
+      ? 'x'
+      : (bufIsChanged(buf) ? '+' : ' ');
+    int ro_char = !MODIFIABLE(buf) ? '-' : (buf->b_p_ro ? '=' : ' ');
+    if (buf->terminal) {
+      ro_char = channel_job_running((uint64_t)buf->b_p_channel) ? 'R' : 'F';
+    }
+
     msg_putchar('\n');
-    len = vim_snprintf((char *)IObuff, IOSIZE - 20, "%3d%c%c%c%c%c \"%s\"",
+    len = vim_snprintf(
+        (char *)IObuff, IOSIZE - 20, "%3d%c%c%c%c%c \"%s\"",
         buf->b_fnum,
         buf->b_p_bl ? ' ' : 'u',
         buf == curbuf ? '%' : (curwin->w_alt_fnum == buf->b_fnum ? '#' : ' '),
         buf->b_ml.ml_mfp == NULL ? ' ' : (buf->b_nwindows == 0 ? 'h' : 'a'),
-        !MODIFIABLE(buf) ? '-' : (buf->b_p_ro ? '=' : ' '),
-        (buf->b_flags & BF_READERR) ? 'x' : (bufIsChanged(buf) ? '+' : ' '),
+        ro_char,
+        changed_char,
         NameBuff);
 
     if (len > IOSIZE - 20) {
@@ -3341,7 +3376,6 @@ int build_stl_str_hl(
   char_u      *usefmt = fmt;
   const int save_must_redraw = must_redraw;
   const int save_redr_type = curwin->w_redr_type;
-  const int save_highlight_shcnaged = need_highlight_changed;
 
   // When the format starts with "%!" then evaluate it as an expression and
   // use the result as the actual format string.
@@ -4405,12 +4439,12 @@ int build_stl_str_hl(
     cur_tab_rec->def.func = NULL;
   }
 
-  // We do not want redrawing a stausline, ruler, title, etc. to trigger
-  // another redraw, it may cause an endless loop.  This happens when a
-  // statusline changes a highlight group.
-  must_redraw = save_must_redraw;
-  curwin->w_redr_type = save_redr_type;
-  need_highlight_changed = save_highlight_shcnaged;
+  // When inside update_screen we do not want redrawing a stausline, ruler,
+  // title, etc. to trigger another redraw, it may cause an endless loop.
+  if (updating_screen) {
+    must_redraw = save_must_redraw;
+    curwin->w_redr_type = save_redr_type;
+  }
 
   return width;
 }
@@ -5147,18 +5181,21 @@ chk_modeline(
 
 // Return true if "buf" is a help buffer.
 bool bt_help(const buf_T *const buf)
+  FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
   return buf != NULL && buf->b_help;
 }
 
 // Return true if "buf" is the quickfix buffer.
 bool bt_quickfix(const buf_T *const buf)
+  FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
   return buf != NULL && buf->b_p_bt[0] == 'q';
 }
 
 // Return true if "buf" is a terminal buffer.
 bool bt_terminal(const buf_T *const buf)
+  FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
   return buf != NULL && buf->b_p_bt[0] == 't';
 }
@@ -5166,6 +5203,7 @@ bool bt_terminal(const buf_T *const buf)
 // Return true if "buf" is a "nofile", "acwrite" or "terminal" buffer.
 // This means the buffer name is not a file name.
 bool bt_nofile(const buf_T *const buf)
+  FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
   return buf != NULL && ((buf->b_p_bt[0] == 'n' && buf->b_p_bt[2] == 'f')
                          || buf->b_p_bt[0] == 'a' || buf->terminal);
@@ -5173,11 +5211,13 @@ bool bt_nofile(const buf_T *const buf)
 
 // Return true if "buf" is a "nowrite", "nofile" or "terminal" buffer.
 bool bt_dontwrite(const buf_T *const buf)
+  FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
   return buf != NULL && (buf->b_p_bt[0] == 'n' || buf->terminal);
 }
 
 bool bt_dontwrite_msg(const buf_T *const buf)
+  FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
   if (bt_dontwrite(buf)) {
     EMSG(_("E382: Cannot write, 'buftype' option is set"));
@@ -5223,8 +5263,8 @@ char_u *buf_spname(buf_T *buf)
   // There is no _file_ when 'buftype' is "nofile", b_sfname
   // contains the name as specified by the user.
   if (bt_nofile(buf)) {
-    if (buf->b_sfname != NULL) {
-      return buf->b_sfname;
+    if (buf->b_fname != NULL) {
+      return buf->b_fname;
     }
     return (char_u *)_("[Scratch]");
   }

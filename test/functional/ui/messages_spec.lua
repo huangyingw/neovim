@@ -5,7 +5,11 @@ local eval = helpers.eval
 local eq = helpers.eq
 local command = helpers.command
 local set_method_error = helpers.set_method_error
-
+local meths = helpers.meths
+local test_build_dir = helpers.test_build_dir
+local nvim_prog = helpers.nvim_prog
+local iswin = helpers.iswin
+local exc_exec = helpers.exc_exec
 
 describe('ui/ext_messages', function()
   local screen
@@ -21,6 +25,8 @@ describe('ui/ext_messages', function()
       [4] = {bold = true, foreground = Screen.colors.SeaGreen4},
       [5] = {foreground = Screen.colors.Blue1},
       [6] = {bold = true, reverse = true},
+      [7] = {background = Screen.colors.Yellow},
+      [8] = {foreground = Screen.colors.Red},
     })
   end)
   after_each(function()
@@ -303,6 +309,65 @@ describe('ui/ext_messages', function()
     }}
   end)
 
+  it('shortmess-=S', function()
+    command('set shortmess-=S')
+    feed('iline 1\nline 2<esc>')
+
+    feed('/line<cr>')
+    screen:expect{grid=[[
+      {7:^line} 1                   |
+      {7:line} 2                   |
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+    ]], messages={
+      {content = {{"/line      [1/2] W"}}, kind = "search_count"}
+    }}
+
+    feed('n')
+    screen:expect{grid=[[
+      {7:line} 1                   |
+      {7:^line} 2                   |
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+    ]], messages={
+      {content = {{"/line        [2/2]"}}, kind = "search_count"}
+    }}
+  end)
+
+  it(':hi Group output', function()
+    feed(':hi ErrorMsg<cr>')
+    screen:expect{grid=[[
+      ^                         |
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+    ]], messages={
+      {content = {{"\nErrorMsg      " }, {"xxx", 2}, {" "},
+                  {"ctermfg=", 5 }, { "15 " }, { "ctermbg=", 5 }, { "1 " },
+                  {"guifg=", 5 }, { "White " }, { "guibg=", 5 }, { "Red" }},
+       kind = ""}
+    }}
+  end)
+
+  it("doesn't crash with column adjustment #10069", function()
+    feed(':let [x,y] = [1,2]<cr>')
+    feed(':let x y<cr>')
+    screen:expect{grid=[[
+      ^                         |
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+      {1:~                        }|
+    ]], messages={
+      {content = {{ "x                     #1" }}, kind = ""},
+      {content = {{ "y                     #2" }}, kind = ""},
+      {content = {{ "Press ENTER or type command to continue", 4 }}, kind = "return_prompt"}
+    }}
+  end)
+
   it('&showmode', function()
     command('imap <f2> <cmd>echomsg "stuff"<cr>')
     feed('i')
@@ -569,7 +634,7 @@ describe('ui/ext_messages', function()
       {1:~                        }|
       {1:~                        }|
     ]], messages={{
-      content = {{ "Type  :qa!  and press <Enter> to abandon all changes and exit Nvim" }},
+      content = {{ "Type  :qa  and press <Enter> to exit Nvim" }},
       kind = ""}
     }}
 
@@ -616,7 +681,7 @@ describe('ui/ext_messages', function()
       {1:~                        }|
     ]], messages={
       {kind="echomsg", content={{"howdy"}}},
-      {kind="", content={{"Type  :qa!  and press <Enter> to abandon all changes and exit Nvim"}}},
+      {kind="", content={{"Type  :qa  and press <Enter> to exit Nvim"}}},
       {kind="echoerr", content={{"bork", 2}}},
       {kind="emsg", content={{"E117: Unknown function: nosuchfunction", 2}}}
     }}
@@ -741,6 +806,8 @@ describe('ui/builtin messages', function()
       [2] = {foreground = Screen.colors.Grey100, background = Screen.colors.Red},
       [3] = {bold = true, reverse = true},
       [4] = {bold = true, foreground = Screen.colors.SeaGreen4},
+      [5] = {foreground = Screen.colors.Blue1},
+      [6] = {bold = true, foreground = Screen.colors.Magenta},
     })
   end)
 
@@ -760,6 +827,78 @@ describe('ui/builtin messages', function()
         set_method_error("complete\nerror\n\nmessage")
       end
     end}
+  end)
+
+  it(':hi Group output', function()
+    screen:try_resize(70,7)
+    feed(':hi ErrorMsg<cr>')
+    screen:expect([[
+                                                                            |
+      {1:~                                                                     }|
+      {1:~                                                                     }|
+      {3:                                                                      }|
+      :hi ErrorMsg                                                          |
+      ErrorMsg       {2:xxx} {5:ctermfg=}15 {5:ctermbg=}1 {5:guifg=}White {5:guibg=}Red         |
+      {4:Press ENTER or type command to continue}^                               |
+    ]])
+
+    feed('<cr>')
+    screen:try_resize(30,7)
+    feed(':hi ErrorMsg<cr>')
+    screen:expect([[
+      :hi ErrorMsg                  |
+      ErrorMsg       {2:xxx} {5:ctermfg=}15 |
+                         {5:ctermbg=}1  |
+                         {5:guifg=}White|
+                         {5:guibg=}Red  |
+      {4:Press ENTER or type command to}|
+      {4: continue}^                     |
+    ]])
+    feed('<cr>')
+
+    -- screen size doesn't affect internal output #10285
+    eq('ErrorMsg       xxx ctermfg=15 ctermbg=1 guifg=White guibg=Red',
+       meths.command_output("hi ErrorMsg"))
+  end)
+
+  it(':syntax list langGroup output', function()
+    command("syntax on")
+    command("set syntax=vim")
+    screen:try_resize(110,7)
+    feed(':syntax list vimComment<cr>')
+    screen:expect([[
+      {6:--- Syntax items ---}                                                                                          |
+      vimComment     {5:xxx} {5:match} /\s"[^\-:.%#=*].*$/ms=s+1,lc=1  {5:excludenl} {5:contains}=@vimCommentGroup,vimCommentString |
+                                                                                                                    |
+                         {5:match} /\<endif\s\+".*$/ms=s+5,lc=5  {5:contains}=@vimCommentGroup,vimCommentString             |
+                         {5:match} /\<else\s\+".*$/ms=s+4,lc=4  {5:contains}=@vimCommentGroup,vimCommentString              |
+                         {5:links to} Comment                                                                           |
+      {4:Press ENTER or type command to continue}^                                                                       |
+    ]])
+
+    feed('<cr>')
+    screen:try_resize(55,7)
+    feed(':syntax list vimComment<cr>')
+    screen:expect([[
+                                                             |
+                         {5:match} /\<endif\s\+".*$/ms=s+5,lc=5  |
+      {5:contains}=@vimCommentGroup,vimCommentString             |
+                         {5:match} /\<else\s\+".*$/ms=s+4,lc=4  {5:c}|
+      {5:ontains}=@vimCommentGroup,vimCommentString              |
+                         {5:links to} Comment                    |
+      {4:Press ENTER or type command to continue}^                |
+    ]])
+    feed('<cr>')
+
+    -- ignore final whitespace inside string
+    -- luacheck: push ignore
+    eq([[--- Syntax items ---
+vimComment     xxx match /\s"[^\-:.%#=*].*$/ms=s+1,lc=1  excludenl contains=@vimCommentGroup,vimCommentString 
+                   match /\<endif\s\+".*$/ms=s+5,lc=5  contains=@vimCommentGroup,vimCommentString 
+                   match /\<else\s\+".*$/ms=s+4,lc=4  contains=@vimCommentGroup,vimCommentString 
+                   links to Comment]],
+       meths.command_output('syntax list vimComment'))
+    -- luacheck: pop
   end)
 end)
 
@@ -866,5 +1005,50 @@ describe('ui/ext_messages', function()
     ]], messages={
       {content = { { "Press ENTER or type command to continue", 4 } }, kind = "return_prompt" }
     }}
+  end)
+end)
+
+describe('ui/msg_puts_printf', function()
+  it('output multibyte characters correctly', function()
+    local screen
+    local cmd = ''
+    local locale_dir = test_build_dir..'/share/locale/ja/LC_MESSAGES'
+
+    clear({env={LANG='ja_JP.UTF-8'}})
+    screen = Screen.new(25, 5)
+    screen:attach()
+
+    if iswin() then
+      if os.execute('chcp 932 > NUL 2>&1') ~= 0 then
+        pending('missing japanese language features', function() end)
+        return
+      else
+        cmd = 'chcp 932 > NULL & '
+      end
+    else
+      if (exc_exec('lang ja_JP.UTF-8') ~= 0) then
+        pending('Locale ja_JP.UTF-8 not supported', function() end)
+        return
+      elseif helpers.isCI() then
+        -- Fails non--Windows CI. Message catalog direcotry issue?
+        pending('fails on unix CI', function() end)
+        return
+      end
+    end
+
+    os.execute('cmake -E make_directory '..locale_dir)
+    os.execute('cmake -E copy '..test_build_dir..'/src/nvim/po/ja.mo '..locale_dir..'/nvim.mo')
+
+    cmd = cmd..'"'..nvim_prog..'" -u NONE -i NONE -Es -V1'
+    command([[call termopen(']]..cmd..[[')]])
+    screen:expect([[
+    ^Exモードに入ります. ノー |
+    マルモードに戻るには"visu|
+    al"と入力してください.   |
+    :                        |
+                             |
+    ]])
+
+    os.execute('cmake -E remove_directory '..test_build_dir..'/share')
   end)
 end)

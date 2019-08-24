@@ -139,8 +139,6 @@ func XlistTests(cchar)
 	      \ ' 5:50 col 25  55: one'], l)
 
   " Test for module names, one needs to explicitly set `'valid':v:true` so
-  let save_shellslash = &shellslash
-  set shellslash
   call g:Xsetlist([
         \ {'lnum':10,'col':5,'type':'W','module':'Data.Text','text':'ModuleWarning','nr':11,'valid':v:true},
         \ {'lnum':20,'col':10,'type':'W','module':'Data.Text','filename':'Data/Text.hs','text':'ModuleWarning','nr':22,'valid':v:true},
@@ -149,7 +147,6 @@ func XlistTests(cchar)
   call assert_equal([' 1 Data.Text:10 col 5 warning  11: ModuleWarning',
         \ ' 2 Data.Text:20 col 10 warning  22: ModuleWarning',
         \ ' 3 Data/Text.hs:30 col 15 warning  33: FileWarning'], l)
-  let &shellslash = save_shellslash
 
   " Error cases
   call assert_fails('Xlist abc', 'E488:')
@@ -3371,4 +3368,50 @@ func Test_lbuffer_with_bwipe()
   augroup nasty
     au!
   augroup END
+endfunc
+
+" Tests for the ':filter /pat/ clist' command
+func Test_filter_clist()
+  cexpr ['Xfile1:10:10:Line 10', 'Xfile2:15:15:Line 15']
+  call assert_equal([' 2 Xfile2:15 col 15: Line 15'],
+			\ split(execute('filter /Line 15/ clist'), "\n"))
+  call assert_equal([' 1 Xfile1:10 col 10: Line 10'],
+			\ split(execute('filter /Xfile1/ clist'), "\n"))
+  call assert_equal([], split(execute('filter /abc/ clist'), "\n"))
+
+  call setqflist([{'module' : 'abc', 'pattern' : 'pat1'},
+			\ {'module' : 'pqr', 'pattern' : 'pat2'}], ' ')
+  call assert_equal([' 2 pqr:pat2:  '],
+			\ split(execute('filter /pqr/ clist'), "\n"))
+  call assert_equal([' 1 abc:pat1:  '],
+			\ split(execute('filter /pat1/ clist'), "\n"))
+endfunc
+
+func Test_setloclist_in_aucmd()
+  " This was using freed memory.
+  augroup nasty
+    au * * call setloclist(0, [], 'f')
+  augroup END
+  lexpr "x"
+  augroup nasty
+    au!
+  augroup END
+endfunc
+
+" Tests for the "CTRL-W <CR>" command.
+func Xview_result_split_tests(cchar)
+  call s:setup_commands(a:cchar)
+
+  " Test that "CTRL-W <CR>" in a qf/ll window fails with empty list.
+  call g:Xsetlist([])
+  Xopen
+  let l:win_count = winnr('$')
+  call assert_fails('execute "normal! \<C-W>\<CR>"', 'E42')
+  call assert_equal(l:win_count, winnr('$'))
+  Xclose
+endfunc
+
+func Test_view_result_split()
+  call Xview_result_split_tests('c')
+  call Xview_result_split_tests('l')
 endfunc

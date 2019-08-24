@@ -37,12 +37,10 @@ func! Test_edit_01()
   call assert_equal([''], getline(1,'$'))
   %d
   " 4) delete a multibyte character
-  if has("multi_byte")
-    call setline(1, "\u0401")
-    call feedkeys("i\<del>\<esc>", 'tnix')
-    call assert_equal([''], getline(1,'$'))
-    %d
-  endif
+  call setline(1, "\u0401")
+  call feedkeys("i\<del>\<esc>", 'tnix')
+  call assert_equal([''], getline(1,'$'))
+  %d
   " 5.1) delete linebreak with 'bs' option containing eol
   let _bs=&bs
   set bs=eol
@@ -452,7 +450,7 @@ endfunc
 
 func! Test_edit_CTRL_()
   " disabled for Windows builds, why?
-  if !has("multi_byte") || !has("rightleft") || has("win32")
+  if !has("rightleft") || has("win32")
     return
   endif
   let _encoding=&encoding
@@ -539,7 +537,7 @@ func! Test_edit_CTRL_I()
   " Tab in completion mode
   let path=expand("%:p:h")
   new
-  call setline(1, [path."/", ''])
+  call setline(1, [path. "/", ''])
   call feedkeys("Arunt\<c-x>\<c-f>\<tab>\<cr>\<esc>", 'tnix')
   call assert_match('runtest\.vim', getline(1))
   %d
@@ -620,7 +618,7 @@ func! Test_edit_CTRL_K()
   endtry
   call delete('Xdictionary.txt')
 
-  if has("multi_byte") && !has("nvim")
+  if exists('*test_override')
     call test_override("char_avail", 1)
     set showcmd
     %d
@@ -643,11 +641,11 @@ func! Test_edit_CTRL_L()
   call feedkeys("cct\<c-x>\<c-l>\<c-n>\<esc>", 'tnix')
   call assert_equal(['one', 'two', 'three', 't', '', '', ''], getline(1, '$'))
   call feedkeys("cct\<c-x>\<c-l>\<c-n>\<c-n>\<esc>", 'tnix')
-  call assert_equal(['one', 'two', 'three', 't', '', '', ''], getline(1, '$'))
-  call feedkeys("cct\<c-x>\<c-l>\<c-n>\<c-n>\<c-n>\<esc>", 'tnix')
   call assert_equal(['one', 'two', 'three', 'two', '', '', ''], getline(1, '$'))
-  call feedkeys("cct\<c-x>\<c-l>\<c-n>\<c-n>\<c-n>\<c-n>\<esc>", 'tnix')
+  call feedkeys("cct\<c-x>\<c-l>\<c-n>\<c-n>\<c-n>\<esc>", 'tnix')
   call assert_equal(['one', 'two', 'three', 'three', '', '', ''], getline(1, '$'))
+  call feedkeys("cct\<c-x>\<c-l>\<c-n>\<c-n>\<c-n>\<c-n>\<esc>", 'tnix')
+  call assert_equal(['one', 'two', 'three', 't', '', '', ''], getline(1, '$'))
   call feedkeys("cct\<c-x>\<c-l>\<c-p>\<esc>", 'tnix')
   call assert_equal(['one', 'two', 'three', 'two', '', '', ''], getline(1, '$'))
   call feedkeys("cct\<c-x>\<c-l>\<c-p>\<c-p>\<esc>", 'tnix')
@@ -1408,7 +1406,6 @@ func Test_edit_complete_very_long_name()
   let save_columns = &columns
   " Need at least about 1100 columns to reproduce the problem.
   set columns=2000
-  call assert_equal(2000, &columns)
   set noswapfile
 
   let longfilename = longdirname . '/' . repeat('a', 255)

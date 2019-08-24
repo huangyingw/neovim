@@ -42,6 +42,8 @@ function Test_window_cmd_wincmd_gf()
   function s:swap_exists()
     let v:swapchoice = s:swap_choice
   endfunc
+  " Remove the catch-all that runtest.vim adds
+  au! SwapExists
   augroup test_window_cmd_wincmd_gf
     autocmd!
     exec "autocmd SwapExists " . fname . " call s:swap_exists()"
@@ -142,6 +144,21 @@ func Test_window_preview()
   call assert_equal(0, &previewwindow)
 
   call assert_fails('wincmd P', 'E441:')
+endfunc
+
+func Test_window_preview_from_help()
+  filetype on
+  call writefile(['/* some C code */'], 'Xpreview.c')
+  help
+  pedit Xpreview.c
+  wincmd P
+  call assert_equal(1, &previewwindow)
+  call assert_equal('c', &filetype)
+  wincmd z
+
+  filetype off
+  close
+  call delete('Xpreview.c')
 endfunc
 
 func Test_window_exchange()
@@ -516,6 +533,43 @@ func Test_winrestcmd()
   call assert_equal(2, winheight(0))
   call assert_equal(3, winwidth(0))
   only
+endfunc
+
+function! Fun_RenewFile()
+  " Need to wait a bit for the timestamp to be older.
+  sleep 2
+  silent execute '!echo "1" > tmp.txt'
+  sp
+  wincmd p
+  edit! tmp.txt
+endfunction
+
+func Test_window_prevwin()
+  " Can we make this work on MS-Windows?
+  if !has('unix')
+    return
+  endif
+
+  set hidden autoread
+  call writefile(['2'], 'tmp.txt')
+  new tmp.txt
+  q
+  call Fun_RenewFile()
+  call assert_equal(2, winnr())
+  wincmd p
+  call assert_equal(1, winnr())
+  wincmd p
+  q
+  call Fun_RenewFile()
+  call assert_equal(2, winnr())
+  wincmd p
+  call assert_equal(1, winnr())
+  wincmd p
+  " reset
+  q
+  call delete('tmp.txt')
+  set hidden&vim autoread&vim
+  delfunc Fun_RenewFile
 endfunc
 
 func Test_relative_cursor_position_in_one_line_window()

@@ -8,6 +8,7 @@
 --    defaults={condition=nil, if_true={vi=224, vim=0}, if_false=nil},
 --    secure=nil, gettext=nil, noglob=nil, normal_fname_chars=nil,
 --    pri_mkrc=nil, deny_in_modelines=nil, normal_dname_chars=nil,
+--    modelineexpr=nil,
 --    expand=nil, nodefault=nil, no_mkrc=nil, vi_def=true, vim=true,
 --    alloced=nil,
 --    save_pv_indir=nil,
@@ -39,7 +40,7 @@ local imacros=function(s)
     return '(intptr_t)' .. s
   end
 end
-local N_=function(s)
+local N_=function(s) -- luacheck: ignore 211 (currently unused)
   return function()
     return 'N_(' .. cstr(s) .. ')'
   end
@@ -188,7 +189,6 @@ return {
     },
     {
       full_name='belloff', abbreviation='bo',
-      deny_duplicates=true,
       type='string', list='comma', scope={'global'},
       deny_duplicates=true,
       vi_def=true,
@@ -283,6 +283,7 @@ return {
       deny_duplicates=true,
       vi_def=true,
       expand=true,
+      secure=true,
       varname='p_cdpath',
       defaults={if_true={vi=",,"}}
     },
@@ -378,10 +379,9 @@ return {
       full_name='columns', abbreviation='co',
       type='number', scope={'global'},
       no_mkrc=true,
-      nodefault=true,
       vi_def=true,
       redraw={'everything'},
-      varname='Columns',
+      varname='p_columns',
       defaults={if_true={vi=macros('DFLT_COLS')}}
     },
     {
@@ -543,7 +543,7 @@ return {
       full_name='cursorcolumn', abbreviation='cuc',
       type='bool', scope={'window'},
       vi_def=true,
-      redraw={'current_window'},
+      redraw={'current_window_only'},
       defaults={if_true={vi=false}}
     },
     {
@@ -847,6 +847,7 @@ return {
       type='string', scope={'window'},
       vi_def=true,
       vim=true,
+      modelineexpr=true,
       alloced=true,
       redraw={'current_window'},
       defaults={if_true={vi="0"}}
@@ -922,6 +923,7 @@ return {
       type='string', scope={'window'},
       vi_def=true,
       vim=true,
+      modelineexpr=true,
       alloced=true,
       redraw={'current_window'},
       defaults={if_true={vi="foldtext()"}}
@@ -931,6 +933,7 @@ return {
       type='string', scope={'buffer'},
       vi_def=true,
       vim=true,
+      modelineexpr=true,
       alloced=true,
       varname='p_fex',
       defaults={if_true={vi=""}}
@@ -1045,6 +1048,7 @@ return {
       full_name='guitablabel', abbreviation='gtl',
       type='string', scope={'global'},
       vi_def=true,
+      modelineexpr=true,
       redraw={'current_window'},
       enable_if=false,
     },
@@ -1136,6 +1140,7 @@ return {
       full_name='iconstring',
       type='string', scope={'global'},
       vi_def=true,
+      modelineexpr=true,
       varname='p_iconstring',
       defaults={if_true={vi=""}}
     },
@@ -1198,6 +1203,7 @@ return {
       full_name='includeexpr', abbreviation='inex',
       type='string', scope={'buffer'},
       vi_def=true,
+      modelineexpr=true,
       alloced=true,
       varname='p_inex',
       defaults={if_true={vi=""}}
@@ -1214,6 +1220,7 @@ return {
       type='string', scope={'buffer'},
       vi_def=true,
       vim=true,
+      modelineexpr=true,
       alloced=true,
       varname='p_inde',
       defaults={if_true={vi=""}}
@@ -1376,10 +1383,9 @@ return {
       full_name='lines',
       type='number', scope={'global'},
       no_mkrc=true,
-      nodefault=true,
       vi_def=true,
       redraw={'everything'},
-      varname='Rows',
+      varname='p_lines',
       defaults={if_true={vi=macros('DFLT_ROWS')}}
     },
     {
@@ -1526,6 +1532,14 @@ return {
       vim=true,
       varname='p_ml',
       defaults={if_true={vi=false, vim=true}}
+    },
+    {
+      full_name='modelineexpr', abbreviation='mle',
+      type='bool', scope={'global'},
+      vi_def=true,
+      secure=true,
+      varname='p_mle',
+      defaults={if_true={vi=false}}
     },
     {
       full_name='modelines', abbreviation='mls',
@@ -1832,6 +1846,13 @@ return {
       defaults={if_true={vi=false}}
     },
     {
+      full_name='redrawdebug', abbreviation='rdb',
+      type='string', list='onecomma', scope={'global'},
+      vi_def=true,
+      varname='p_rdb',
+      defaults={if_true={vi=''}}
+    },
+    {
       full_name='redrawtime', abbreviation='rdt',
       type='number', scope={'global'},
       vi_def=true,
@@ -1903,6 +1924,7 @@ return {
       type='string', scope={'global'},
       vi_def=true,
       alloced=true,
+      modelineexpr=true,
       redraw={'statuslines'},
       varname='p_ruf',
       defaults={if_true={vi=""}}
@@ -2310,6 +2332,7 @@ return {
       type='string', scope={'global', 'window'},
       vi_def=true,
       alloced=true,
+      modelineexpr=true,
       redraw={'statuslines'},
       varname='p_stl',
       defaults={if_true={vi=""}}
@@ -2369,6 +2392,7 @@ return {
       full_name='tabline', abbreviation='tal',
       type='string', scope={'global'},
       vi_def=true,
+      modelineexpr=true,
       redraw={'all_windows'},
       varname='p_tal',
       defaults={if_true={vi=""}}
@@ -2528,6 +2552,7 @@ return {
       full_name='titlestring',
       type='string', scope={'global'},
       vi_def=true,
+      modelineexpr=true,
       varname='p_titlestring',
       defaults={if_true={vi=""}}
     },
@@ -2729,9 +2754,9 @@ return {
       full_name='wildoptions', abbreviation='wop',
       type='string', list='onecomma', scope={'global'},
       deny_duplicates=true,
-      vi_def=true,
+      vim=true,
       varname='p_wop',
-      defaults={if_true={vi=""}}
+      defaults={if_true={vi='', vim='pum,tagfile'}}
     },
     {
       full_name='winaltkeys', abbreviation='wak',
@@ -2739,6 +2764,13 @@ return {
       vi_def=true,
       varname='p_wak',
       defaults={if_true={vi="menu"}}
+    },
+    {
+      full_name='winblend', abbreviation='winbl',
+      type='number', scope={'window'},
+      vi_def=true,
+      redraw={'current_window'},
+      defaults={if_true={vi=0}}
     },
     {
       full_name='winhighlight', abbreviation='winhl',

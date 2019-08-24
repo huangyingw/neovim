@@ -44,6 +44,42 @@ func Test_map_completion()
   call assert_equal('"map <special> <nowait>', getreg(':'))
   call feedkeys(":map <silent> <sp\<Tab>\<Home>\"\<CR>", 'xt')
   call assert_equal('"map <silent> <special>', getreg(':'))
+
+  map ,f commaf
+  map ,g commaf
+  call feedkeys(":map ,\<Tab>\<Home>\"\<CR>", 'xt')
+  call assert_equal('"map ,f', getreg(':'))
+  call feedkeys(":map ,\<Tab>\<Tab>\<Home>\"\<CR>", 'xt')
+  call assert_equal('"map ,g', getreg(':'))
+  unmap ,f
+  unmap ,g
+
+  set cpo-=< cpo-=B cpo-=k
+  map <Left> left
+  call feedkeys(":map <L\<Tab>\<Home>\"\<CR>", 'xt')
+  call assert_equal('"map <Left>', getreg(':'))
+  unmap <Left>
+
+  " set cpo+=<
+  map <Left> left
+  call feedkeys(":map <L\<Tab>\<Home>\"\<CR>", 'xt')
+  call assert_equal('"map <Left>', getreg(':'))
+  unmap <Left>
+  set cpo-=<
+
+  set cpo+=B
+  map <Left> left
+  call feedkeys(":map <L\<Tab>\<Home>\"\<CR>", 'xt')
+  call assert_equal('"map <Left>', getreg(':'))
+  unmap <Left>
+  set cpo-=B
+
+  " set cpo+=k
+  map <Left> left
+  call feedkeys(":map <L\<Tab>\<Home>\"\<CR>", 'xt')
+  call assert_equal('"map <Left>', getreg(':'))
+  unmap <Left>
+  " set cpo-=k
 endfunc
 
 func Test_match_completion()
@@ -232,6 +268,15 @@ func Test_getcompletion()
   let l = getcompletion('not', 'mapclear')
   call assert_equal([], l)
 
+  let l = getcompletion('.', 'shellcmd')
+  call assert_equal(['./', '../'], l[0:1])
+  call assert_equal(-1, match(l[2:], '^\.\.\?/$'))
+  let root = has('win32') ? 'C:\\' : '/'
+  let l = getcompletion(root, 'shellcmd')
+  let expected = map(filter(glob(root . '*', 0, 1),
+        \ 'isdirectory(v:val) || executable(v:val)'), 'isdirectory(v:val) ? v:val . ''/'' : v:val')
+  call assert_equal(expected, l)
+
   if has('cscope')
     let l = getcompletion('', 'cscope')
     let cmds = ['add', 'find', 'help', 'kill', 'reset', 'show']
@@ -273,8 +318,7 @@ func Test_getcompletion()
   call assert_equal([], l)
 
   " For others test if the name is recognized.
-  let names = ['buffer', 'environment', 'file_in_path',
-	\ 'mapping', 'shellcmd', 'tag', 'tag_listfiles', 'user']
+  let names = ['buffer', 'environment', 'file_in_path', 'mapping', 'tag', 'tag_listfiles', 'user']
   if has('cmdline_hist')
     call add(names, 'history')
   endif
@@ -294,6 +338,7 @@ func Test_getcompletion()
   endfor
 
   call delete('Xtags')
+  set tags&
 
   call assert_fails('call getcompletion("", "burp")', 'E475:')
 endfunc
@@ -523,7 +568,8 @@ func Test_setcmdpos()
 endfunc
 
 func Test_cmdline_overstrike()
-  let encodings = has('multi_byte') ? [ 'utf8' ] : [ 'latin1' ]
+  " Nvim: only utf8 is supported.
+  let encodings = ['utf8']
   let encoding_save = &encoding
 
   for e in encodings
@@ -542,11 +588,9 @@ func Test_cmdline_overstrike()
     call assert_equal('"ab0cd3ef4', @:)
   endfor
 
-  if has('multi_byte')
-    " Test overstrike with multi-byte characters.
-    call feedkeys(":\"テキストエディタ\<home>\<right>\<right>ab\<right>\<insert>cd\<enter>", 'xt')
-    call assert_equal('"テabキcdエディタ', @:)
-  endif
+  " Test overstrike with multi-byte characters.
+  call feedkeys(":\"テキストエディタ\<home>\<right>\<right>ab\<right>\<insert>cd\<enter>", 'xt')
+  call assert_equal('"テabキcdエディタ', @:)
 
   let &encoding = encoding_save
 endfunc

@@ -206,11 +206,10 @@ func Test_mkview_loadview_with_viewdir()
 
   " The directory Xviewdir/ should have been created and the view
   " should be stored in that directory.
-  let pathsep = has('win32') ? '\' : '/'
-  call assert_equal('Xviewdir' . pathsep .
+  call assert_equal('Xviewdir/' .
         \           substitute(
         \             substitute(
-        \               expand('%:p'), pathsep, '=+', 'g'), ':', '=-', 'g') . '=1.vim',
+        \               expand('%:p'), '/', '=+', 'g'), ':', '=-', 'g') . '=1.vim',
         \           glob('Xviewdir/*'))
   call assert_equal(1, &number)
   call assert_match('\*:mkview\*$', getline('.'))
@@ -236,6 +235,17 @@ func Test_mkview_no_file_name()
 
   call delete('Xview')
   %bwipe
+endfunc
+
+" A clean session (one empty buffer, one window, and one tab) should not
+" set any error messages when sourced because no commands should fail.
+func Test_mksession_no_errmsg()
+  let v:errmsg = ''
+  %bwipe!
+  mksession! Xtest_mks.out
+  source Xtest_mks.out
+  call assert_equal('', v:errmsg)
+  call delete('Xtest_mks.out')
 endfunc
 
 func Test_mksession_quote_in_filename()
