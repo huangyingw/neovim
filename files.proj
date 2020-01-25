@@ -75,6 +75,7 @@
 "./contrib/uncrustify.cfg"
 "./contrib/vim-addon-local-vimrc/README.md"
 "./contrib/vim-addon-local-vimrc/vimrc"
+"./fav.log.sort"
 "./includefile.conf"
 "./install.sh"
 "./man/Makefile"
