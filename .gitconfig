@@ -19,3 +19,5 @@
 [branch "dev"]
     remote = github
     merge = refs/heads/dev
+[gdif]
+    ignore = install.sh
