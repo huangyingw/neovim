@@ -72,12 +72,6 @@
 # define VIMRC_FILE     ".nvimrc"
 #endif
 
-typedef enum {
-  kNone  = -1,
-  kFalse = 0,
-  kTrue  = 1,
-} TriState;
-
 EXTERN struct nvim_stats_s {
   int64_t fsync;
   int64_t redraw;
@@ -131,6 +125,13 @@ typedef off_t off_T;
  * held down based on the MOD_MASK_* symbols that are read first.
  */
 EXTERN int mod_mask INIT(= 0x0);                /* current key modifiers */
+
+
+// TODO(bfredl): for the final interface this should find a more suitable
+// location.
+EXTERN sattr_T *lua_attr_buf INIT(= NULL);
+EXTERN size_t lua_attr_bufsize INIT(= 0);
+EXTERN bool lua_attr_active INIT(= false);
 
 /*
  * Cmdline_row is the row where the command line starts, just below the
@@ -324,7 +325,7 @@ EXTERN except_T *caught_stack INIT(= NULL);
 /// we do garbage collection before waiting for a char at the toplevel.
 /// "garbage_collect_at_exit" indicates garbagecollect(1) was called.
 ///
-EXTERN int may_garbage_collect INIT(= false);
+EXTERN bool may_garbage_collect INIT(= false);
 EXTERN int want_garbage_collect INIT(= false);
 EXTERN int garbage_collect_at_exit INIT(= false);
 
@@ -337,9 +338,10 @@ EXTERN int garbage_collect_at_exit INIT(= false);
 #define SID_NONE        -6      // don't set scriptID
 #define SID_LUA         -7      // for Lua scripts/chunks
 #define SID_API_CLIENT  -8      // for API clients
+#define SID_STR         -9      // for sourcing a string
 
-// ID of script being sourced or was sourced to define the current function.
-EXTERN scid_T current_SID INIT(= 0);
+// Script CTX being sourced or was sourced to define the current function.
+EXTERN sctx_T current_sctx INIT(= { 0 COMMA 0 COMMA 0 });
 // ID of the current channel making a client API call
 EXTERN uint64_t current_channel_id INIT(= 0);
 
@@ -348,8 +350,8 @@ EXTERN bool did_source_packages INIT(= false);
 // Scope information for the code that indirectly triggered the current
 // provider function call
 EXTERN struct caller_scope {
-  scid_T SID;
-  uint8_t *sourcing_name, *autocmd_fname, *autocmd_match; 
+  sctx_T script_ctx;
+  uint8_t *sourcing_name, *autocmd_fname, *autocmd_match;
   linenr_T sourcing_lnum;
   int autocmd_bufnr;
   void *funccalp;
@@ -406,11 +408,6 @@ EXTERN bool mouse_past_eol INIT(= false);       /* mouse right of line */
 EXTERN int mouse_dragging INIT(= 0);            /* extending Visual area with
                                                    mouse dragging */
 
-/* Value set from 'diffopt'. */
-EXTERN int diff_context INIT(= 6);              /* context for folds */
-EXTERN int diff_foldcolumn INIT(= 2);           /* 'foldcolumn' for diff mode */
-EXTERN int diff_need_scrollbind INIT(= FALSE);
-
 /* The root of the menu hierarchy. */
 EXTERN vimmenu_T        *root_menu INIT(= NULL);
 /*
@@ -462,6 +459,7 @@ EXTERN frame_T  *topframe;      /* top of the window frame tree */
  * one in the list, "curtab" is the current one.
  */
 EXTERN tabpage_T    *first_tabpage;
+EXTERN tabpage_T    *lastused_tabpage;
 EXTERN tabpage_T    *curtab;
 EXTERN int redraw_tabline INIT(= FALSE);           /* need to redraw tabline */
 
@@ -661,9 +659,10 @@ EXTERN char_u *fenc_default INIT(= NULL);
 ///    finish_op  :    When State is NORMAL, after typing the operator and
 ///                    before typing the motion command.
 ///    motion_force:   Last motion_force from do_pending_operator()
+///    debug_mode:     Debug mode
 EXTERN int State INIT(= NORMAL);        // This is the current state of the
                                         // command interpreter.
-
+EXTERN bool debug_mode INIT(= false);
 EXTERN bool finish_op INIT(= false);    // true while an operator is pending
 EXTERN long opcount INIT(= 0);          // count for pending operator
 EXTERN int motion_force INIT(=0);       // motion force for pending operator
@@ -773,7 +772,6 @@ EXTERN int did_outofmem_msg INIT(= false);
 // set after out of memory msg
 EXTERN int did_swapwrite_msg INIT(= false);
 // set after swap write error msg
-EXTERN int undo_off INIT(= false);          // undo switched off for now
 EXTERN int global_busy INIT(= 0);           // set when :global is executing
 EXTERN int listcmd_busy INIT(= false);      // set when :argdo, :windo or
                                             // :bufdo is executing
@@ -792,7 +790,11 @@ EXTERN int postponed_split_flags INIT(= 0);       /* args for win_split() */
 EXTERN int postponed_split_tab INIT(= 0);       /* cmdmod.tab */
 EXTERN int g_do_tagpreview INIT(= 0);       /* for tag preview commands:
                                                height of preview window */
-EXTERN int replace_offset INIT(= 0);        /* offset for replace_push() */
+EXTERN int g_tag_at_cursor INIT(= false);  // whether the tag command comes
+                                           // from the command line (0) or was
+                                           // invoked as a normal command (1)
+
+EXTERN int replace_offset INIT(= 0);        // offset for replace_push()
 
 EXTERN char_u   *escape_chars INIT(= (char_u *)" \t\\\"|");
 /* need backslash in cmd line */
@@ -867,8 +869,8 @@ EXTERN char_u wim_flags[4];
 # define STL_IN_TITLE   2
 EXTERN int stl_syntax INIT(= 0);
 
-/* don't use 'hlsearch' temporarily */
-EXTERN int no_hlsearch INIT(= FALSE);
+// don't use 'hlsearch' temporarily
+EXTERN bool no_hlsearch INIT(= false);
 
 /* Page number used for %N in 'pageheader' and 'guitablabel'. */
 EXTERN linenr_T printer_page_num;
@@ -1057,6 +1059,8 @@ EXTERN char_u e_floatexchange[] INIT(=N_(
 
 EXTERN char top_bot_msg[] INIT(= N_("search hit TOP, continuing at BOTTOM"));
 EXTERN char bot_top_msg[] INIT(= N_("search hit BOTTOM, continuing at TOP"));
+
+EXTERN char line_msg[] INIT(= N_(" line "));
 
 // For undo we need to know the lowest time possible.
 EXTERN time_t starttime;

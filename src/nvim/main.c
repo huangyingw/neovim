@@ -12,6 +12,7 @@
 #include "nvim/ascii.h"
 #include "nvim/vim.h"
 #include "nvim/main.h"
+#include "nvim/aucmd.h"
 #include "nvim/buffer.h"
 #include "nvim/charset.h"
 #include "nvim/diff.h"
@@ -26,6 +27,7 @@
 #include "nvim/highlight.h"
 #include "nvim/iconv.h"
 #include "nvim/if_cscope.h"
+#include "nvim/lua/executor.h"
 #ifdef HAVE_LOCALE_H
 # include <locale.h>
 #endif
@@ -62,6 +64,9 @@
 #include "nvim/os/os.h"
 #include "nvim/os/time.h"
 #include "nvim/os/fileio.h"
+#ifdef WIN32
+# include "nvim/os/os_win_console.h"
+#endif
 #include "nvim/event/loop.h"
 #include "nvim/os/signal.h"
 #include "nvim/event/process.h"
@@ -142,8 +147,9 @@ static const char *err_extra_cmd =
 
 void event_init(void)
 {
-  log_init();
   loop_init(&main_loop, NULL);
+  resize_events = multiqueue_new_child(main_loop.events);
+
   // early msgpack-rpc initialization
   msgpack_rpc_init_method_table();
   msgpack_rpc_helpers_init();
@@ -216,6 +222,7 @@ void early_init(void)
   // First find out the home directory, needed to expand "~" in options.
   init_homedir();               // find real value of $HOME
   set_init_1();
+  log_init();
   TIME_MSG("inits 1");
 
   set_lang_var();               // set v:lang and v:ctype
@@ -349,7 +356,7 @@ int main(int argc, char **argv)
   bool use_remote_ui = (embedded_mode && !headless_mode);
   bool use_builtin_ui = (!headless_mode && !embedded_mode && !silent_mode);
   if (use_remote_ui || use_builtin_ui) {
-    TIME_MSG("waiting for UI to make request");
+    TIME_MSG("waiting for UI");
     if (use_remote_ui) {
       remote_ui_wait_for_attach();
     } else {
@@ -535,6 +542,10 @@ int main(int argc, char **argv)
   set_vim_var_nr(VV_VIM_DID_ENTER, 1L);
   apply_autocmds(EVENT_VIMENTER, NULL, NULL, false, curbuf);
   TIME_MSG("VimEnter autocommands");
+  if (use_remote_ui || use_builtin_ui) {
+    do_autocmd_uienter(use_remote_ui ? CHAN_STDIO : 0, true);
+    TIME_MSG("UIEnter autocommands");
+  }
 
   // Adjust default register name for "unnamed" in 'clipboard'. Can only be
   // done after the clipboard is available and all initial commands that may
@@ -950,6 +961,7 @@ static void command_line_scan(mparm_T *parmp)
         case 'r':    // "-r" recovery mode
         case 'L': {  // "-L" recovery mode
           recoverymode = 1;
+          headless_mode = true;
           break;
         }
         case 's': {
@@ -1111,13 +1123,7 @@ scripterror:
               const int stdin_dup_fd = os_dup(STDIN_FILENO);
 #ifdef WIN32
               // Replace the original stdin with the console input handle.
-              close(STDIN_FILENO);
-              const HANDLE conin_handle =
-                CreateFile("CONIN$", GENERIC_READ | GENERIC_WRITE,
-                           FILE_SHARE_READ, (LPSECURITY_ATTRIBUTES)NULL,
-                           OPEN_EXISTING, 0, (HANDLE)NULL);
-              const int conin_fd = _open_osfhandle(conin_handle, _O_RDONLY);
-              assert(conin_fd == STDIN_FILENO);
+              os_replace_stdin_to_conin();
 #endif
               FileDescriptor *const stdin_dup = file_open_fd_new(
                   &error, stdin_dup_fd, kFileReadOnly|kFileNonBlocking);
@@ -1214,6 +1220,10 @@ scripterror:
       argv++;
       argv_idx = 1;
     }
+  }
+
+  if (embedded_mode && silent_mode) {
+    mainerr(_("--embed conflicts with -es/-Es"), NULL);
   }
 
   // If there is a "+123" or "-c" command, set v:swapcommand to the first one.
@@ -1449,12 +1459,13 @@ static void create_windows(mparm_T *parmp)
   } else
     parmp->window_count = 1;
 
-  if (recoverymode) {                   /* do recover */
-    msg_scroll = TRUE;                  /* scroll message up */
-    ml_recover();
-    if (curbuf->b_ml.ml_mfp == NULL)     /* failed */
+  if (recoverymode) {                   // do recover
+    msg_scroll = true;                  // scroll message up
+    ml_recover(true);
+    if (curbuf->b_ml.ml_mfp == NULL) {   // failed
       getout(1);
-    do_modelines(0);                    /* do modelines */
+    }
+    do_modelines(0);                    // do modelines
   } else {
     // Open a buffer for windows that don't have one yet.
     // Commands in the vimrc might have loaded a file or split the window.
@@ -1502,7 +1513,7 @@ static void create_windows(mparm_T *parmp)
           /* We can't close the window, it would disturb what
            * happens next.  Clear the file name and set the arg
            * index to -1 to delete it later. */
-          setfname(curbuf, NULL, NULL, FALSE);
+          setfname(curbuf, NULL, NULL, false);
           curwin->w_arg_idx = -1;
           swap_exists_action = SEA_NONE;
         } else
@@ -1533,6 +1544,7 @@ static void edit_buffers(mparm_T *parmp, char_u *cwd)
   int i;
   bool advance = true;
   win_T       *win;
+  char *p_shm_save = NULL;
 
   /*
    * Don't execute Win/Buf Enter/Leave autocommands here
@@ -1564,6 +1576,16 @@ static void edit_buffers(mparm_T *parmp, char_u *cwd)
         if (curtab->tp_next == NULL)            /* just checking */
           break;
         goto_tabpage(0);
+        // Temporarily reset 'shm' option to not print fileinfo when
+        // loading the other buffers. This would overwrite the already
+        // existing fileinfo for the first tab.
+        if (i == 1) {
+          char buf[100];
+
+          p_shm_save = xstrdup((char *)p_shm);
+          snprintf(buf, sizeof(buf), "F%s", p_shm);
+          set_option_value("shm", 0L, buf, 0);
+        }
       } else {
         if (curwin->w_next == NULL)             /* just checking */
           break;
@@ -1604,6 +1626,11 @@ static void edit_buffers(mparm_T *parmp, char_u *cwd)
     }
   }
 
+  if (p_shm_save != NULL) {
+    set_option_value("shm", 0L, p_shm_save, 0);
+    xfree(p_shm_save);
+  }
+
   if (parmp->window_layout == WIN_TABS)
     goto_tabpage(1);
   --autocmd_no_enter;
@@ -1638,11 +1665,12 @@ static void exe_pre_commands(mparm_T *parmp)
   if (cnt > 0) {
     curwin->w_cursor.lnum = 0;     /* just in case.. */
     sourcing_name = (char_u *)_("pre-vimrc command line");
-    current_SID = SID_CMDARG;
-    for (i = 0; i < cnt; ++i)
+    current_sctx.sc_sid = SID_CMDARG;
+    for (i = 0; i < cnt; i++) {
       do_cmdline_cmd(cmds[i]);
+    }
     sourcing_name = NULL;
-    current_SID = 0;
+    current_sctx.sc_sid = 0;
     TIME_MSG("--cmd commands");
   }
 }
@@ -1663,16 +1691,18 @@ static void exe_commands(mparm_T *parmp)
   if (parmp->tagname == NULL && curwin->w_cursor.lnum <= 1)
     curwin->w_cursor.lnum = 0;
   sourcing_name = (char_u *)"command line";
-  current_SID = SID_CARG;
-  for (i = 0; i < parmp->n_commands; ++i) {
+  current_sctx.sc_sid = SID_CARG;
+  current_sctx.sc_seq = 0;
+  for (i = 0; i < parmp->n_commands; i++) {
     do_cmdline_cmd(parmp->commands[i]);
     if (parmp->cmds_tofree[i])
       xfree(parmp->commands[i]);
   }
   sourcing_name = NULL;
-  current_SID = 0;
-  if (curwin->w_cursor.lnum == 0)
+  current_sctx.sc_sid = 0;
+  if (curwin->w_cursor.lnum == 0) {
     curwin->w_cursor.lnum = 1;
+  }
 
   if (!exmode_active)
     msg_scroll = FALSE;
@@ -1748,7 +1778,8 @@ static bool do_user_initialization(void)
   if (do_source(user_vimrc, true, DOSO_VIMRC) != FAIL) {
     do_exrc = p_exrc;
     if (do_exrc) {
-      do_exrc = (path_full_compare((char_u *)VIMRC_FILE, user_vimrc, false)
+      do_exrc = (path_full_compare((char_u *)VIMRC_FILE, user_vimrc,
+                                   false, true)
                  != kEqualFiles);
     }
     xfree(user_vimrc);
@@ -1775,7 +1806,7 @@ static bool do_user_initialization(void)
         do_exrc = p_exrc;
         if (do_exrc) {
           do_exrc = (path_full_compare((char_u *)VIMRC_FILE, (char_u *)vimrc,
-                                      false) != kEqualFiles);
+                                       false, true) != kEqualFiles);
         }
         xfree(vimrc);
         xfree(config_dirs);
@@ -1858,12 +1889,14 @@ static int execute_env(char *env)
     linenr_T save_sourcing_lnum = sourcing_lnum;
     sourcing_name = (char_u *)env;
     sourcing_lnum = 0;
-    scid_T save_sid = current_SID;
-    current_SID = SID_ENV;
+    const sctx_T save_current_sctx = current_sctx;
+    current_sctx.sc_sid = SID_ENV;
+    current_sctx.sc_seq = 0;
+    current_sctx.sc_lnum = 0;
     do_cmdline_cmd((char *)initstr);
     sourcing_name = save_sourcing_name;
     sourcing_lnum = save_sourcing_lnum;
-    current_SID = save_sid;
+    current_sctx = save_current_sctx;
     return OK;
   }
   return FAIL;

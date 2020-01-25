@@ -58,12 +58,14 @@ If you run into problems, uninstall _both_ then install "pynvim" again: >
 PYTHON PROVIDER CONFIGURATION ~
 						*g:python_host_prog*
 Command to start Python 2 (executable, not directory). Setting this makes
-startup faster. Useful for working with virtualenvs.  >
+startup faster. Useful for working with virtualenvs. Must be set before any
+check for has("python2").  >
     let g:python_host_prog  = '/path/to/python'
 <
 						*g:python3_host_prog*
 Command to start Python 3 (executable, not directory). Setting this makes
-startup faster. Useful for working with virtualenvs.  >
+startup faster. Useful for working with virtualenvs. Must be set before any
+check for has("python3").  >
     let g:python3_host_prog = '/path/to/python3'
 <
 						*g:loaded_python_provider*
@@ -124,6 +126,31 @@ To use an absolute path (e.g. to an rbenv installation): >
 To use the RVM "system" Ruby installation: >
     let g:ruby_host_prog = 'rvm system do neovim-ruby-host'
 
+==============================================================================
+Perl integration				*provider-perl*
+
+Nvim supports Perl |remote-plugin|s.
+https://github.com/jacquesg/p5-Neovim-Ext
+
+
+PERL QUICKSTART~
+
+To use perl remote-plugins with Nvim, install the "Neovim::Ext" cpan package: >
+    cpanm -n Neovim::Ext
+
+Run |:checkhealth| to see if your system is up-to-date.
+
+
+PERL PROVIDER CONFIGURATION~
+						*g:loaded_perl_provider*
+To disable Perl support: >
+    :let g:loaded_perl_provider = 0
+<
+						*g:perl_host_prog*
+Command to start the Perl executable. Must be set before any
+check for has("perl").  >
+    let g:perl_host_prog = '/path/to/perl'
+<
 ==============================================================================
 Node.js integration				*provider-nodejs*
 
@@ -217,6 +244,42 @@ For example this configuration uses the g:foo variable as a fake clipboard: >
 The "copy" function stores a list of lines and the register type. The "paste"
 function returns the clipboard as a `[lines, regtype]` list, where `lines` is
 a list of lines and `regtype` is a register type conforming to |setreg()|.
+
+==============================================================================
+Paste 							*provider-paste* *paste*
+
+"Paste" is a separate concept from |clipboard|: paste means "dump a bunch of
+text to the editor", whereas clipboard provides features like |quote-+| to get
+and set the OS clipboard directly.  For example, middle-click or CTRL-SHIFT-v
+(macOS: CMD-v) in your terminal is "paste", not "clipboard": the terminal
+application (Nvim) just gets a stream of text, it does not interact with the
+clipboard directly.
+
+							*bracketed-paste-mode*
+Pasting in the |TUI| depends on the "bracketed paste" terminal capability,
+which allows terminal applications to distinguish between user input and
+pasted text.  https://cirw.in/blog/bracketed-paste
+This works automatically if your terminal supports it.
+
+							*ui-paste*
+GUIs can paste by calling |nvim_paste()|.
+
+PASTE BEHAVIOR ~
+
+Paste inserts text after the cursor.  Lines break at <NL>, <CR>, and <CR><NL>.
+When pasting a huge amount of text, screen-updates are throttled and the
+message area shows a "..." pulse.
+
+In cmdline-mode only the first line is pasted, to avoid accidentally executing
+many commands.  Use the |cmdline-window| if you really want to paste multiple
+lines to the cmdline.
+
+You can implement a custom paste handler by redefining |vim.paste()|.
+Example: >
+
+  vim.paste = (function(lines, phase)
+    vim.api.nvim_put(lines, 'c', true, true)
+  end)
 
 ==============================================================================
 X11 selection mechanism			      *clipboard-x11* *x11-selection*

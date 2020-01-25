@@ -3,7 +3,6 @@
 
 #include <assert.h>
 #include <inttypes.h>
-#include <stdint.h>
 
 #include "nvim/vim.h"
 #include "nvim/ascii.h"
@@ -462,6 +461,9 @@ cin_iscase (
   if (cin_starts_with(s, "case")) {
     for (s += 4; *s; ++s) {
       s = cin_skipcomment(s);
+      if (*s == NUL) {
+        break;
+      }
       if (*s == ':') {
         if (s[1] == ':')                /* skip over "::" for C++ */
           ++s;
@@ -1676,25 +1678,27 @@ void parse_cino(buf_T *buf)
 
   for (p = buf->b_p_cino; *p; ) {
     l = p++;
-    if (*p == '-')
-      ++p;
-    char_u *digits_start = p;             /* remember where the digits start */
-    int n = getdigits_int(&p);
+    if (*p == '-') {
+      p++;
+    }
+    char_u *digits_start = p;   // remember where the digits start
+    int n = getdigits_int(&p, true, 0);
     divider = 0;
-    if (*p == '.') {        /* ".5s" means a fraction */
+    if (*p == '.') {        // ".5s" means a fraction.
       fraction = atoi((char *)++p);
       while (ascii_isdigit(*p)) {
-        ++p;
-        if (divider)
+        p++;
+        if (divider) {
           divider *= 10;
-        else
+        } else {
           divider = 10;
+        }
       }
     }
-    if (*p == 's') {        /* "2s" means two times 'shiftwidth' */
-      if (p == digits_start)
-        n = sw;         /* just "s" is one 'shiftwidth' */
-      else {
+    if (*p == 's') {        // "2s" means two times 'shiftwidth'.
+      if (p == digits_start) {
+        n = sw;             // just "s" is one 'shiftwidth'.
+      } else {
         n *= sw;
         if (divider)
           n += (sw * fraction + divider / 2) / divider;
@@ -1911,15 +1915,15 @@ int get_c_indent(void)
       int what = 0;
 
       while (*p != NUL && *p != ':') {
-        if (*p == COM_START || *p == COM_END || *p == COM_MIDDLE)
+        if (*p == COM_START || *p == COM_END || *p == COM_MIDDLE) {
           what = *p++;
-        else if (*p == COM_LEFT || *p == COM_RIGHT)
+        } else if (*p == COM_LEFT || *p == COM_RIGHT) {
           align = *p++;
-        else if (ascii_isdigit(*p) || *p == '-') {
-          off = getdigits_int(&p);
+        } else if (ascii_isdigit(*p) || *p == '-') {
+          off = getdigits_int(&p, true, 0);
+        } else {
+          p++;
         }
-        else
-          ++p;
       }
 
       if (*p == ':')

@@ -178,6 +178,12 @@ describe('startup defaults', function()
     eq({ f }, eval('v:oldfiles'))
     os.remove('Xtest-foo')
     rmdir('Xtest-userdata')
+
+    -- Handles viminfo/viminfofile as alias for shada/shadafile.
+    eq('\n  shadafile=', eval('execute("set shadafile?")'))
+    eq('\n  shadafile=', eval('execute("set viminfofile?")'))
+    eq("\n  shada=!,'100,<50,s10,h", eval('execute("set shada?")'))
+    eq("\n  shada=!,'100,<50,s10,h", eval('execute("set viminfo?")'))
   end)
 
   it("'packpath'", function()
@@ -218,9 +224,6 @@ describe('startup defaults', function()
         XDG_DATA_HOME=xdgdir,
         NVIM_LOG_FILE='',  -- Empty is invalid.
       }})
-      -- server_start() calls ELOG, which tickles log_path_init().
-      pcall(command, 'call serverstart(serverlist()[0])')
-
       eq(xdgdir..'/'..datasubdir..'/log', string.gsub(eval('$NVIM_LOG_FILE'), '\\', '/'))
     end)
     it('defaults to stdpath("data")/log if invalid', function()
@@ -229,9 +232,6 @@ describe('startup defaults', function()
         XDG_DATA_HOME=xdgdir,
         NVIM_LOG_FILE='.',  -- Any directory is invalid.
       }})
-      -- server_start() calls ELOG, which tickles log_path_init().
-      pcall(command, 'call serverstart(serverlist()[0])')
-
       eq(xdgdir..'/'..datasubdir..'/log', string.gsub(eval('$NVIM_LOG_FILE'), '\\', '/'))
     end)
     it('defaults to .nvimlog if stdpath("data") is invalid', function()
@@ -239,9 +239,6 @@ describe('startup defaults', function()
         XDG_DATA_HOME='Xtest-missing-xdg-dir',
         NVIM_LOG_FILE='.',  -- Any directory is invalid.
       }})
-      -- server_start() calls ELOG, which tickles log_path_init().
-      pcall(command, 'call serverstart(serverlist()[0])')
-
       eq('.nvimlog', eval('$NVIM_LOG_FILE'))
     end)
   end)

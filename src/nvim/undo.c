@@ -79,7 +79,6 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <string.h>
 #include <fcntl.h>
 
@@ -92,7 +91,9 @@
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
 #include "nvim/buffer_updates.h"
+#include "nvim/pos.h"  // MAXLNUM
 #include "nvim/mark.h"
+#include "nvim/extmark.h"
 #include "nvim/memline.h"
 #include "nvim/message.h"
 #include "nvim/misc1.h"
@@ -107,6 +108,7 @@
 #include "nvim/types.h"
 #include "nvim/os/os.h"
 #include "nvim/os/time.h"
+#include "nvim/lib/kvec.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "undo.c.generated.h"
@@ -223,9 +225,6 @@ int u_save_cursor(void)
  */
 int u_save(linenr_T top, linenr_T bot)
 {
-  if (undo_off)
-    return OK;
-
   if (top >= bot || bot > (curbuf->b_ml.ml_line_count + 1)) {
     return FAIL;        /* rely on caller to do error messages */
   }
@@ -244,10 +243,7 @@ int u_save(linenr_T top, linenr_T bot)
  */
 int u_savesub(linenr_T lnum)
 {
-  if (undo_off)
-    return OK;
-
-  return u_savecommon(lnum - 1, lnum + 1, lnum + 1, FALSE);
+  return u_savecommon(lnum - 1, lnum + 1, lnum + 1, false);
 }
 
 /*
@@ -258,10 +254,7 @@ int u_savesub(linenr_T lnum)
  */
 int u_inssub(linenr_T lnum)
 {
-  if (undo_off)
-    return OK;
-
-  return u_savecommon(lnum - 1, lnum, lnum + 1, FALSE);
+  return u_savecommon(lnum - 1, lnum, lnum + 1, false);
 }
 
 /*
@@ -273,9 +266,6 @@ int u_inssub(linenr_T lnum)
  */
 int u_savedel(linenr_T lnum, long nlines)
 {
-  if (undo_off)
-    return OK;
-
   return u_savecommon(lnum - 1, lnum + nlines,
       nlines == curbuf->b_ml.ml_line_count ? 2 : lnum, FALSE);
 }
@@ -385,6 +375,7 @@ int u_savecommon(linenr_T top, linenr_T bot, linenr_T newbot, int reload)
        * up the undo info when out of memory.
        */
       uhp = xmalloc(sizeof(u_header_T));
+      kv_init(uhp->uh_extmark);
 #ifdef U_DEBUG
       uhp->uh_magic = UH_MAGIC;
 #endif
@@ -1066,7 +1057,7 @@ void u_write_undo(const char *const name, const bool forceit, buf_T *const buf,
     if (file_name == NULL) {
       if (p_verbose > 0) {
         verbose_enter();
-        smsg(_("Cannot write undo file in any directory in 'undodir'"));
+        smsg("%s", _("Cannot write undo file in any directory in 'undodir'"));
         verbose_leave();
       }
       return;
@@ -2250,10 +2241,10 @@ static void u_undoredo(int undo, bool do_buf_event)
       xfree((char_u *)uep->ue_array);
     }
 
-    /* adjust marks */
+    // Adjust marks
     if (oldsize != newsize) {
       mark_adjust(top + 1, top + oldsize, (long)MAXLNUM,
-                  (long)newsize - (long)oldsize, false);
+                  (long)newsize - (long)oldsize, kExtmarkNOOP);
       if (curbuf->b_op_start.lnum > top + oldsize) {
         curbuf->b_op_start.lnum += newsize - oldsize;
       }
@@ -2286,6 +2277,23 @@ static void u_undoredo(int undo, bool do_buf_event)
     newlist = uep;
   }
 
+  // Adjust Extmarks
+  ExtmarkUndoObject undo_info;
+  if (undo) {
+    for (i = (int)kv_size(curhead->uh_extmark) - 1; i > -1; i--) {
+      undo_info = kv_A(curhead->uh_extmark, i);
+      extmark_apply_undo(undo_info, undo);
+    }
+  // redo
+  } else {
+    for (i = 0; i < (int)kv_size(curhead->uh_extmark); i++) {
+      undo_info = kv_A(curhead->uh_extmark, i);
+      extmark_apply_undo(undo_info, undo);
+    }
+  }
+  // finish Adjusting extmarks
+
+
   curhead->uh_entry = newlist;
   curhead->uh_flags = new_flags;
   if ((old_flags & UH_EMPTYBUF) && BUFEMPTY()) {
@@ -2294,7 +2302,7 @@ static void u_undoredo(int undo, bool do_buf_event)
   if (old_flags & UH_CHANGED) {
     changed();
   } else {
-    unchanged(curbuf, FALSE);
+    unchanged(curbuf, false, true);
   }
 
   // because the calls to changed()/unchanged() above will bump changedtick
@@ -2829,6 +2837,8 @@ u_freeentries(
     u_freeentry(uep, uep->ue_size);
   }
 
+  kv_destroy(uhp->uh_extmark);
+
 #ifdef U_DEBUG
   uhp->uh_magic = 0;
 #endif
@@ -2903,9 +2913,6 @@ void u_undoline(void)
   colnr_T t;
   char_u  *oldp;
 
-  if (undo_off)
-    return;
-
   if (curbuf->b_u_line_ptr == NULL
       || curbuf->b_u_line_lnum > curbuf->b_ml.ml_line_count) {
     beep_flush();
@@ -2962,7 +2969,7 @@ static char_u *u_save_line(linenr_T lnum)
 ///
 /// @return true if the buffer has changed
 bool bufIsChanged(buf_T *buf)
-  FUNC_ATTR_WARN_UNUSED_RESULT
+  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_WARN_UNUSED_RESULT
 {
   return !bt_dontwrite(buf) && (buf->b_changed || file_ff_differs(buf, true));
 }
@@ -2979,15 +2986,12 @@ bool anyBufIsChanged(void)
   return false;
 }
 
-/// Check if the 'modified' flag is set, or 'ff' has changed (only need to
-/// check the first character, because it can only be "dos", "unix" or "mac").
-/// "nofile" and "scratch" type buffers are considered to always be unchanged.
-///
+/// @see bufIsChanged
 /// @return true if the current buffer has changed
 bool curbufIsChanged(void)
+  FUNC_ATTR_WARN_UNUSED_RESULT
 {
-  return (!bt_dontwrite(curbuf)
-          && (curbuf->b_changed || file_ff_differs(curbuf, true)));
+  return bufIsChanged(curbuf);
 }
 
 /// Append the list of undo blocks to a newly allocated list
@@ -3025,4 +3029,35 @@ list_T *u_eval_tree(const u_header_T *const first_uhp)
   }
 
   return list;
+}
+
+// Given the buffer, Return the undo header. If none is set, set one first.
+// NULL will be returned if e.g undolevels = -1 (undo disabled)
+u_header_T *u_force_get_undo_header(buf_T *buf)
+{
+  u_header_T *uhp = NULL;
+  if (buf->b_u_curhead != NULL) {
+    uhp = buf->b_u_curhead;
+  } else if (buf->b_u_newhead) {
+    uhp = buf->b_u_newhead;
+  }
+  // Create the first undo header for the buffer
+  if (!uhp) {
+    // Undo is normally invoked in change code, which already has swapped
+    // curbuf.
+    buf_T *save_curbuf = curbuf;
+    curbuf = buf;
+    // Args are tricky: this means replace empty range by empty range..
+    u_savecommon(0, 1, 1, true);
+    curbuf = save_curbuf;
+
+    uhp = buf->b_u_curhead;
+    if (!uhp) {
+      uhp = buf->b_u_newhead;
+      if (get_undolevel() > 0 && !uhp) {
+        abort();
+      }
+    }
+  }
+  return uhp;
 }

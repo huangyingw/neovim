@@ -14,9 +14,11 @@
 #include "nvim/option.h"
 #include "nvim/os/os.h"
 #include "nvim/os/input.h"
+#ifdef WIN32
+# include "nvim/os/os_win_console.h"
+#endif
 #include "nvim/event/rstream.h"
 
-#define PASTETOGGLE_KEY "<Paste>"
 #define KEY_BUFFER_SIZE 0xfff
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
@@ -26,8 +28,9 @@
 void tinput_init(TermInput *input, Loop *loop)
 {
   input->loop = loop;
-  input->paste_enabled = false;
-  input->in_fd = 0;
+  input->paste = 0;
+  input->in_fd = STDIN_FILENO;
+  input->waiting_for_bg_response = 0;
   input->key_buffer = rbuffer_new(KEY_BUFFER_SIZE);
   uv_mutex_init(&input->key_buffer_mutex);
   uv_cond_init(&input->key_buffer_cond);
@@ -36,18 +39,12 @@ void tinput_init(TermInput *input, Loop *loop)
   //    echo q | nvim -es
   //    ls *.md | xargs nvim
 #ifdef WIN32
-  if (!os_isatty(0)) {
-      const HANDLE conin_handle = CreateFile("CONIN$",
-                                             GENERIC_READ | GENERIC_WRITE,
-                                             FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                             (LPSECURITY_ATTRIBUTES)NULL,
-                                             OPEN_EXISTING, 0, (HANDLE)NULL);
-      input->in_fd = _open_osfhandle(conin_handle, _O_RDONLY);
-      assert(input->in_fd != -1);
+  if (!os_isatty(input->in_fd)) {
+      input->in_fd = os_get_conin_fd();
   }
 #else
-  if (!os_isatty(0) && os_isatty(2)) {
-    input->in_fd = 2;
+  if (!os_isatty(input->in_fd) && os_isatty(STDERR_FILENO)) {
+    input->in_fd = STDERR_FILENO;
   }
 #endif
   input_global_fd_init(input->in_fd);
@@ -105,13 +102,26 @@ static void tinput_wait_enqueue(void **argv)
 {
   TermInput *input = argv[0];
   RBUFFER_UNTIL_EMPTY(input->key_buffer, buf, len) {
-    size_t consumed = input_enqueue((String){.data = buf, .size = len});
-    if (consumed) {
-      rbuffer_consumed(input->key_buffer, consumed);
-    }
-    rbuffer_reset(input->key_buffer);
-    if (consumed < len) {
-      break;
+    const String keys = { .data = buf, .size = len };
+    if (input->paste) {
+      String copy = copy_string(keys);
+      multiqueue_put(main_loop.events, tinput_paste_event, 3,
+                     copy.data, copy.size, (intptr_t)input->paste);
+      if (input->paste == 1) {
+        // Paste phase: "continue"
+        input->paste = 2;
+      }
+      rbuffer_consumed(input->key_buffer, len);
+      rbuffer_reset(input->key_buffer);
+    } else {
+      const size_t consumed = input_enqueue(keys);
+      if (consumed) {
+        rbuffer_consumed(input->key_buffer, consumed);
+      }
+      rbuffer_reset(input->key_buffer);
+      if (consumed < len) {
+        break;
+      }
     }
   }
   uv_mutex_lock(&input->key_buffer_mutex);
@@ -120,12 +130,27 @@ static void tinput_wait_enqueue(void **argv)
   uv_mutex_unlock(&input->key_buffer_mutex);
 }
 
+static void tinput_paste_event(void **argv)
+{
+  String keys = { .data = argv[0], .size = (size_t)argv[1] };
+  intptr_t phase = (intptr_t)argv[2];
+
+  Error err = ERROR_INIT;
+  nvim_paste(keys, true, phase, &err);
+  if (ERROR_SET(&err)) {
+    emsgf("paste: %s", err.msg);
+    api_clear_error(&err);
+  }
+
+  api_free_string(keys);
+}
+
 static void tinput_flush(TermInput *input, bool wait_until_empty)
 {
   size_t drain_boundary = wait_until_empty ? 0 : 0xff;
   do {
     uv_mutex_lock(&input->key_buffer_mutex);
-    loop_schedule(&main_loop, event_create(tinput_wait_enqueue, 1, input));
+    loop_schedule_fast(&main_loop, event_create(tinput_wait_enqueue, 1, input));
     input->waiting = true;
     while (input->waiting) {
       uv_cond_wait(&input->key_buffer_cond, &input->key_buffer_mutex);
@@ -292,9 +317,12 @@ static void tk_getkeys(TermInput *input, bool force)
     }
   }
 
-  if (result != TERMKEY_RES_AGAIN || input->paste_enabled) {
+  if (result != TERMKEY_RES_AGAIN) {
     return;
   }
+  // else: Partial keypress event was found in the buffer, but it does not
+  // yet contain all the bytes required. `key` structure indicates what
+  // termkey_getkey_force() would return.
 
   int ms  = get_key_code_timeout();
 
@@ -326,8 +354,8 @@ static bool handle_focus_event(TermInput *input)
   if (rbuffer_size(input->read_stream.buffer) > 2
       && (!rbuffer_cmp(input->read_stream.buffer, "\x1b[I", 3)
           || !rbuffer_cmp(input->read_stream.buffer, "\x1b[O", 3))) {
-    // Advance past the sequence
     bool focus_gained = *rbuffer_get(input->read_stream.buffer, 2) == 'I';
+    // Advance past the sequence
     rbuffer_consumed(input->read_stream.buffer, 3);
     aucmd_schedule_focusgained(focus_gained);
     return true;
@@ -341,18 +369,33 @@ static bool handle_bracketed_paste(TermInput *input)
       && (!rbuffer_cmp(input->read_stream.buffer, "\x1b[200~", 6)
           || !rbuffer_cmp(input->read_stream.buffer, "\x1b[201~", 6))) {
     bool enable = *rbuffer_get(input->read_stream.buffer, 4) == '0';
+    if (input->paste && enable) {
+      return false;  // Pasting "start paste" code literally.
+    }
     // Advance past the sequence
     rbuffer_consumed(input->read_stream.buffer, 6);
-    if (input->paste_enabled == enable) {
-      return true;
+    if (!!input->paste == enable) {
+      return true;  // Spurious "disable paste" code.
     }
-    tinput_enqueue(input, PASTETOGGLE_KEY, sizeof(PASTETOGGLE_KEY) - 1);
-    input->paste_enabled = enable;
+
+    if (enable) {
+      // Flush before starting paste.
+      tinput_flush(input, true);
+      // Paste phase: "first-chunk".
+      input->paste = 1;
+    } else if (input->paste) {
+      // Paste phase: "last-chunk".
+      input->paste = input->paste == 2 ? 3 : -1;
+      tinput_flush(input, true);
+      // Paste phase: "disabled".
+      input->paste = 0;
+    }
     return true;
   }
   return false;
 }
 
+// ESC NUL => <Esc>
 static bool handle_forced_escape(TermInput *input)
 {
   if (rbuffer_size(input->read_stream.buffer) > 1
@@ -398,6 +441,9 @@ static void set_bg_deferred(void **argv)
 // [1] https://en.wikipedia.org/wiki/Luma_%28video%29
 static bool handle_background_color(TermInput *input)
 {
+  if (input->waiting_for_bg_response <= 0) {
+    return false;
+  }
   size_t count = 0;
   size_t component = 0;
   size_t header_size = 0;
@@ -416,8 +462,13 @@ static bool handle_background_color(TermInput *input)
     header_size = 10;
     num_components = 4;
   } else {
+    input->waiting_for_bg_response--;
+    if (input->waiting_for_bg_response == 0) {
+      DLOG("did not get a response for terminal background query");
+    }
     return false;
   }
+  input->waiting_for_bg_response = 0;
   rbuffer_consumed(input->read_stream.buffer, header_size);
   RBUFFER_EACH(input->read_stream.buffer, c, i) {
     count = i + 1;
@@ -458,6 +509,12 @@ static bool handle_background_color(TermInput *input)
   }
   return true;
 }
+#ifdef UNIT_TESTING
+bool ut_handle_background_color(TermInput *input)
+{
+  return handle_background_color(input);
+}
+#endif
 
 static void tinput_read_cb(Stream *stream, RBuffer *buf, size_t count_,
                            void *data, bool eof)
@@ -465,7 +522,7 @@ static void tinput_read_cb(Stream *stream, RBuffer *buf, size_t count_,
   TermInput *input = data;
 
   if (eof) {
-    loop_schedule(&main_loop, event_create(tinput_done_event, 0));
+    loop_schedule_fast(&main_loop, event_create(tinput_done_event, 0));
     return;
   }
 
@@ -477,9 +534,11 @@ static void tinput_read_cb(Stream *stream, RBuffer *buf, size_t count_,
       continue;
     }
 
-    // Find the next 'esc' and push everything up to it(excluding). This is done
-    // so the `handle_bracketed_paste`/`handle_forced_escape` calls above work
-    // as expected.
+    //
+    // Find the next ESC and push everything up to it (excluding), so it will
+    // be the first thing encountered on the next iteration. The `handle_*`
+    // calls (above) depend on this.
+    //
     size_t count = 0;
     RBUFFER_EACH(input->read_stream.buffer, c, i) {
       count = i + 1;
@@ -488,15 +547,28 @@ static void tinput_read_cb(Stream *stream, RBuffer *buf, size_t count_,
         break;
       }
     }
-
+    // Push bytes directly (paste).
+    if (input->paste) {
+      RBUFFER_UNTIL_EMPTY(input->read_stream.buffer, ptr, len) {
+        size_t consumed = MIN(count, len);
+        assert(consumed <= input->read_stream.buffer->size);
+        tinput_enqueue(input, ptr, consumed);
+        rbuffer_consumed(input->read_stream.buffer, consumed);
+        if (!(count -= consumed)) {
+          break;
+        }
+      }
+      continue;
+    }
+    // Push through libtermkey (translates to "<keycode>" strings, etc.).
     RBUFFER_UNTIL_EMPTY(input->read_stream.buffer, ptr, len) {
       size_t consumed = termkey_push_bytes(input->tk, ptr, MIN(count, len));
       // termkey_push_bytes can return (size_t)-1, so it is possible that
       // `consumed > input->read_stream.buffer->size`, but since tk_getkeys is
-      // called soon, it shouldn't happen
+      // called soon, it shouldn't happen.
       assert(consumed <= input->read_stream.buffer->size);
       rbuffer_consumed(input->read_stream.buffer, consumed);
-      // Need to process the keys now since there's no guarantee "count" will
+      // Process the keys now: there is no guarantee `count` will
       // fit into libtermkey's input buffer.
       tk_getkeys(input, false);
       if (!(count -= consumed)) {
@@ -505,7 +577,8 @@ static void tinput_read_cb(Stream *stream, RBuffer *buf, size_t count_,
     }
   } while (rbuffer_size(input->read_stream.buffer));
   tinput_flush(input, true);
-  // Make sure the next input escape sequence fits into the ring buffer
-  // without wrap around, otherwise it could be misinterpreted.
+  // Make sure the next input escape sequence fits into the ring buffer without
+  // wraparound, else it could be misinterpreted (because rbuffer_read_ptr()
+  // exposes the underlying buffer to callers unaware of the wraparound).
   rbuffer_reset(input->read_stream.buffer);
 }

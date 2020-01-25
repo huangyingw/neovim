@@ -216,7 +216,7 @@ func Test_set_completion()
 
   " Expand files and directories.
   call feedkeys(":set tags=./\<C-A>\<C-B>\"\<CR>", 'tx')
-  call assert_match('./samples/ ./sautest/ ./setup.vim ./shared.vim', @:)
+  call assert_match('./samples/ ./sautest/ ./screendump.vim ./setup.vim ./shared.vim', @:)
 
   call feedkeys(":set tags=./\\\\ dif\<C-A>\<C-B>\"\<CR>", 'tx')
   call assert_equal('"set tags=./\\ diff diffexpr diffopt', @:)
@@ -476,13 +476,19 @@ func Test_shortmess_F2()
   call assert_match('file2', execute('bn', ''))
   set shortmess+=F
   call assert_true(empty(execute('bn', '')))
+  " call assert_false(test_getvalue('need_fileinfo'))
   call assert_true(empty(execute('bn', '')))
+  " call assert_false(test_getvalue('need_fileinfo'))
   set hidden
   call assert_true(empty(execute('bn', '')))
+  " call assert_false(test_getvalue('need_fileinfo'))
   call assert_true(empty(execute('bn', '')))
+  " call assert_false(test_getvalue('need_fileinfo'))
   set nohidden
   call assert_true(empty(execute('bn', '')))
+  " call assert_false(test_getvalue('need_fileinfo'))
   call assert_true(empty(execute('bn', '')))
+  " call assert_false(test_getvalue('need_fileinfo'))
   " Accommodate Nvim default.
   set shortmess-=F
   call assert_match('file1', execute('bn', ''))

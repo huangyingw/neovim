@@ -122,6 +122,7 @@ let s:filename_checks = {
     \ 'cvs': ['cvs123'],
     \ 'cvsrc': ['.cvsrc'],
     \ 'cynpp': ['file.cyn'],
+    \ 'dart': ['file.dart', 'file.drt'],
     \ 'datascript': ['file.ds'],
     \ 'dcd': ['file.dcd'],
     \ 'debcontrol': ['/debian/control'],
@@ -201,6 +202,7 @@ let s:filename_checks = {
     \ 'hex': ['file.hex', 'file.h32'],
     \ 'hgcommit': ['hg-editor-file.txt'],
     \ 'hog': ['file.hog', 'snort.conf', 'vision.conf'],
+    \ 'hollywood': ['file.hws'],
     \ 'hostconf': ['/etc/host.conf'],
     \ 'hostsaccess': ['/etc/hosts.allow', '/etc/hosts.deny'],
     \ 'template': ['file.tmpl'],
@@ -221,7 +223,8 @@ let s:filename_checks = {
     \ 'jam': ['file.jpl', 'file.jpr'],
     \ 'java': ['file.java', 'file.jav'],
     \ 'javacc': ['file.jj', 'file.jjt'],
-    \ 'javascript': ['file.js', 'file.javascript', 'file.es', 'file.jsx', 'file.mjs'],
+    \ 'javascript': ['file.js', 'file.javascript', 'file.es', 'file.mjs', 'file.cjs'],
+    \ 'javascriptreact': ['file.jsx'],
     \ 'jess': ['file.clp'],
     \ 'jgraph': ['file.jgr'],
     \ 'jovial': ['file.jov', 'file.j73', 'file.jovial'],
@@ -272,6 +275,7 @@ let s:filename_checks = {
     \ 'mason': ['file.mason', 'file.mhtml', 'file.comp'],
     \ 'master': ['file.mas', 'file.master'],
     \ 'mel': ['file.mel'],
+    \ 'meson': ['meson.build', 'meson_options.txt'],
     \ 'messages': ['/log/auth', '/log/cron', '/log/daemon', '/log/debug', '/log/kern', '/log/lpr', '/log/mail', '/log/messages', '/log/news/news', '/log/syslog', '/log/user',
     \     '/log/auth.log', '/log/cron.log', '/log/daemon.log', '/log/debug.log', '/log/kern.log', '/log/lpr.log', '/log/mail.log', '/log/messages.log', '/log/news/news.log', '/log/syslog.log', '/log/user.log',
     \     '/log/auth.err', '/log/cron.err', '/log/daemon.err', '/log/debug.err', '/log/kern.err', '/log/lpr.err', '/log/mail.err', '/log/messages.err', '/log/news/news.err', '/log/syslog.err', '/log/user.err',
@@ -360,6 +364,7 @@ let s:filename_checks = {
     \ 'rcs': ['file,v'],
     \ 'readline': ['.inputrc', 'inputrc'],
     \ 'remind': ['.reminders', 'file.remind', 'file.rem'],
+    \ 'rego': ['file.rego'],
     \ 'resolv': ['resolv.conf'],
     \ 'reva': ['file.frt'],
     \ 'rexx': ['file.rex', 'file.orx', 'file.rxo', 'file.rxj', 'file.jrexx', 'file.rexxj', 'file.rexx', 'file.testGroup', 'file.testUnit'],
@@ -426,6 +431,9 @@ let s:filename_checks = {
     \ 'sudoers': ['any/etc/sudoers', 'sudoers.tmp'],
     \ 'svg': ['file.svg'],
     \ 'svn': ['svn-commitfile.tmp'],
+    \ 'swift': ['file.swift'],
+    \ 'swiftgyb': ['file.swift.gyb'],
+    \ 'sil': ['file.sil'],
     \ 'sysctl': ['/etc/sysctl.conf', '/etc/sysctl.d/file.conf'],
     \ 'systemd': ['any/systemd/file.automount', 'any/systemd/file.mount', 'any/systemd/file.path', 'any/systemd/file.service', 'any/systemd/file.socket', 'any/systemd/file.swap', 'any/systemd/file.target', 'any/systemd/file.timer', '/etc/systemd/system/some.d/file.conf', '/etc/systemd/system/some.d/.#file'],
     \ 'systemverilog': ['file.sv', 'file.svh'],
@@ -454,6 +462,7 @@ let s:filename_checks = {
     \ 'tssop': ['file.tssop'],
     \ 'twig': ['file.twig'],
     \ 'typescript': ['file.ts'],
+    \ 'typescriptreact': ['file.tsx'],
     \ 'uc': ['file.uc'],
     \ 'udevconf': ['/etc/udev/udev.conf'],
     \ 'udevperm': ['/etc/udev/permissions.d/file.permissions'],
@@ -608,5 +617,5 @@ endfunc
 
 func Test_setfiletype_completion()
   call feedkeys(":setfiletype java\<C-A>\<C-B>\"\<CR>", 'tx')
-  call assert_equal('"setfiletype java javacc javascript', @:)
+  call assert_equal('"setfiletype java javacc javascript javascriptreact', @:)
 endfunc

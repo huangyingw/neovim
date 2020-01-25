@@ -97,10 +97,11 @@ typedef struct sn_prl_S {
 struct source_cookie {
   FILE *fp;                     ///< opened file for sourcing
   char_u *nextline;             ///< if not NULL: line that was read ahead
+  linenr_T sourcing_lnum;       ///< line number of the source file
   int finished;                 ///< ":finish" used
 #if defined(USE_CRNL)
   int fileformat;               ///< EOL_UNKNOWN, EOL_UNIX or EOL_DOS
-  bool error;                    ///< true if LF found after CR-LF
+  bool error;                   ///< true if LF found after CR-LF
 #endif
   linenr_T breakpoint;          ///< next line with breakpoint or zero
   char_u *fname;                ///< name of sourced file
@@ -159,6 +160,7 @@ void do_debug(char_u *cmd)
   redir_off = true;             // don't redirect debug commands
 
   State = NORMAL;
+  debug_mode = true;
 
   if (!debug_did_msg) {
     MSG(_("Entering Debug mode.  Type \"cont\" to continue."));
@@ -337,6 +339,7 @@ void do_debug(char_u *cmd)
   msg_scroll = save_msg_scroll;
   lines_left = (int)(Rows - 1);
   State = save_State;
+  debug_mode = false;
   did_emsg = save_did_emsg;
   cmd_silent = save_cmd_silent;
   msg_silent = save_msg_silent;
@@ -568,7 +571,7 @@ static int dbg_parsearg(char_u *arg, garray_T *gap)
   if (here) {
     bp->dbg_lnum = curwin->w_cursor.lnum;
   } else if (gap != &prof_ga && ascii_isdigit(*p)) {
-    bp->dbg_lnum = getdigits_long(&p);
+    bp->dbg_lnum = getdigits_long(&p, true, 0);
     p = skipwhite(p);
   } else {
     bp->dbg_lnum = 0;
@@ -1078,8 +1081,8 @@ void script_prof_save(
 {
   scriptitem_T    *si;
 
-  if (current_SID > 0 && current_SID <= script_items.ga_len) {
-    si = &SCRIPT_ITEM(current_SID);
+  if (current_sctx.sc_sid > 0 && current_sctx.sc_sid <= script_items.ga_len) {
+    si = &SCRIPT_ITEM(current_sctx.sc_sid);
     if (si->sn_prof_on && si->sn_pr_nest++ == 0) {
       si->sn_pr_child = profile_start();
     }
@@ -1092,8 +1095,8 @@ void script_prof_restore(proftime_T *tm)
 {
   scriptitem_T    *si;
 
-  if (current_SID > 0 && current_SID <= script_items.ga_len) {
-    si = &SCRIPT_ITEM(current_SID);
+  if (current_sctx.sc_sid > 0 && current_sctx.sc_sid <= script_items.ga_len) {
+    si = &SCRIPT_ITEM(current_sctx.sc_sid);
     if (si->sn_prof_on && --si->sn_pr_nest == 0) {
       si->sn_pr_child = profile_end(si->sn_pr_child);
       // don't count wait time
@@ -1190,8 +1193,8 @@ static void script_dump_profile(FILE *fd)
 /// profiled.
 bool prof_def_func(void)
 {
-  if (current_SID > 0) {
-    return SCRIPT_ITEM(current_SID).sn_pr_force;
+  if (current_sctx.sc_sid > 0) {
+    return SCRIPT_ITEM(current_sctx.sc_sid).sn_pr_force;
   }
   return false;
 }
@@ -1321,7 +1324,7 @@ void dialog_changed(buf_T *buf, bool checkall)
       (void)buf_write_all(buf, false);
     }
   } else if (ret == VIM_NO) {
-    unchanged(buf, true);
+    unchanged(buf, true, false);
   } else if (ret == VIM_ALL) {
     // Write all modified files that can be written.
     // Skip readonly buffers, these need to be confirmed
@@ -1346,7 +1349,7 @@ void dialog_changed(buf_T *buf, bool checkall)
   } else if (ret == VIM_DISCARDALL) {
     // mark all buffers as unchanged
     FOR_ALL_BUFFERS(buf2) {
-      unchanged(buf2, true);
+      unchanged(buf2, true, false);
     }
   }
 }
@@ -1411,6 +1414,7 @@ bool check_changed_any(bool hidden, bool unload)
   size_t bufcount = 0;
   int         *bufnrs;
 
+  // Make a list of all buffers, with the most important ones first.
   FOR_ALL_BUFFERS(buf) {
     bufcount++;
   }
@@ -1423,14 +1427,15 @@ bool check_changed_any(bool hidden, bool unload)
 
   // curbuf
   bufnrs[bufnum++] = curbuf->b_fnum;
-  // buf in curtab
+
+  // buffers in current tab
   FOR_ALL_WINDOWS_IN_TAB(wp, curtab) {
     if (wp->w_buffer != curbuf) {
       add_bufnum(bufnrs, &bufnum, wp->w_buffer->b_fnum);
     }
   }
 
-  // buf in other tab
+  // buffers in other tabs
   FOR_ALL_TABS(tp) {
     if (tp != curtab) {
       FOR_ALL_WINDOWS_IN_TAB(wp, tp) {
@@ -1439,7 +1444,7 @@ bool check_changed_any(bool hidden, bool unload)
     }
   }
 
-  // any other buf
+  // any other buffer
   FOR_ALL_BUFFERS(buf) {
     add_bufnum(bufnrs, &bufnum, buf->b_fnum);
   }
@@ -1468,6 +1473,7 @@ bool check_changed_any(bool hidden, bool unload)
     goto theend;
   }
 
+  // Get here if "buf" cannot be abandoned.
   ret = true;
   exiting = false;
   // When ":confirm" used, don't give an error message.
@@ -1741,7 +1747,7 @@ static bool editing_arg_idx(win_T *win)
                && (win->w_buffer->b_ffname == NULL
                    || !(path_full_compare(
                        alist_name(&WARGLIST(win)[win->w_arg_idx]),
-                       win->w_buffer->b_ffname, true) & kEqualFiles))));
+                       win->w_buffer->b_ffname, true, true) & kEqualFiles))));
 }
 
 /// Check if window "win" is editing the w_arg_idx file in its argument list.
@@ -1759,7 +1765,7 @@ void check_arg_idx(win_T *win)
         && (win->w_buffer->b_fnum == GARGLIST[GARGCOUNT - 1].ae_fnum
             || (win->w_buffer->b_ffname != NULL
                 && (path_full_compare(alist_name(&GARGLIST[GARGCOUNT - 1]),
-                                      win->w_buffer->b_ffname, true)
+                                      win->w_buffer->b_ffname, true, true)
                     & kEqualFiles)))) {
       arg_had_last = true;
     }
@@ -3012,10 +3018,77 @@ static FILE *fopen_noinh_readbin(char *filename)
   return fdopen(fd_tmp, READBIN);
 }
 
+typedef struct {
+  char_u *buf;
+  size_t offset;
+} GetStrLineCookie;
 
-/// Read the file "fname" and execute its lines as EX commands.
+/// Get one full line from a sourced string (in-memory, no file).
+/// Called by do_cmdline() when it's called from do_source_str().
+///
+/// @return pointer to allocated line, or NULL for end-of-file or
+///         some error.
+static char_u *get_str_line(int c, void *cookie, int indent, bool do_concat)
+{
+  GetStrLineCookie *p = cookie;
+  size_t i = p->offset;
+  if (strlen((char *)p->buf) <= p->offset) {
+    return NULL;
+  }
+  while (!(p->buf[i] == '\n' || p->buf[i] == '\0')) {
+    i++;
+  }
+  char buf[2046];
+  char *dst;
+  dst = xstpncpy(buf, (char *)p->buf + p->offset, i - p->offset);
+  if ((uint32_t)(dst - buf) != i - p->offset) {
+    smsg(_(":source error parsing command %s"), p->buf);
+    return NULL;
+  }
+  buf[i - p->offset] = '\0';
+  p->offset = i + 1;
+  return (char_u *)xstrdup(buf);
+}
+
+/// Executes lines in `src` as Ex commands.
+///
+/// @see do_source()
+int do_source_str(const char *cmd, const char *traceback_name)
+{
+  char_u *save_sourcing_name = sourcing_name;
+  linenr_T save_sourcing_lnum = sourcing_lnum;
+  char_u sourcing_name_buf[256];
+  if (save_sourcing_name == NULL) {
+    sourcing_name = (char_u *)traceback_name;
+  } else {
+    snprintf((char *)sourcing_name_buf, sizeof(sourcing_name_buf),
+             "%s called at %s:%"PRIdLINENR, traceback_name, save_sourcing_name,
+             save_sourcing_lnum);
+    sourcing_name = sourcing_name_buf;
+  }
+  sourcing_lnum = 0;
+
+  GetStrLineCookie cookie = {
+    .buf = (char_u *)cmd,
+    .offset = 0,
+  };
+  const sctx_T save_current_sctx = current_sctx;
+  current_sctx.sc_sid = SID_STR;
+  current_sctx.sc_seq = 0;
+  current_sctx.sc_lnum = save_sourcing_lnum;
+  int retval = do_cmdline(NULL, get_str_line, (void *)&cookie,
+                          DOCMD_VERBOSE | DOCMD_NOWAIT | DOCMD_REPEAT);
+  current_sctx = save_current_sctx;
+  sourcing_lnum = save_sourcing_lnum;
+  sourcing_name = save_sourcing_name;
+  return retval;
+}
+
+/// Reads the file `fname` and executes its lines as Ex commands.
 ///
 /// This function may be called recursively!
+///
+/// @see do_source_str
 ///
 /// @param fname
 /// @param check_other  check for .vimrc and _vimrc
@@ -3031,8 +3104,8 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
   char_u                  *fname_exp;
   char_u                  *firstline = NULL;
   int retval = FAIL;
-  scid_T save_current_SID;
   static scid_T last_current_SID = 0;
+  static int last_current_SID_seq = 0;
   void                    *save_funccalp;
   int save_debug_break_level = debug_break_level;
   scriptitem_T            *si = NULL;
@@ -3109,8 +3182,6 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
   }
   if (is_vimrc == DOSO_VIMRC) {
     vimrc_found(fname_exp, (char_u *)"MYVIMRC");
-  } else if (is_vimrc == DOSO_GVIMRC) {
-    vimrc_found(fname_exp, (char_u *)"MYGVIMRC");
   }
 
 #ifdef USE_CRNL
@@ -3124,6 +3195,7 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
 #endif
 
   cookie.nextline = NULL;
+  cookie.sourcing_lnum = 0;
   cookie.finished = false;
 
   // Check if this script has a breakpoint.
@@ -3159,12 +3231,16 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
 
   // Check if this script was sourced before to finds its SID.
   // If it's new, generate a new SID.
-  save_current_SID = current_SID;
+  // Always use a new sequence number.
+  const sctx_T save_current_sctx = current_sctx;
+  current_sctx.sc_seq = ++last_current_SID_seq;
+  current_sctx.sc_lnum = 0;
   FileID file_id;
   bool file_id_ok = os_fileid((char *)fname_exp, &file_id);
   assert(script_items.ga_len >= 0);
-  for (current_SID = script_items.ga_len; current_SID > 0; current_SID--) {
-    si = &SCRIPT_ITEM(current_SID);
+  for (current_sctx.sc_sid = script_items.ga_len; current_sctx.sc_sid > 0;
+       current_sctx.sc_sid--) {
+    si = &SCRIPT_ITEM(current_sctx.sc_sid);
     // Compare dev/ino when possible, it catches symbolic links.
     // Also compare file names, the inode may change when the file was edited.
     bool file_id_equal = file_id_ok && si->file_id_valid
@@ -3174,15 +3250,15 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
       break;
     }
   }
-  if (current_SID == 0) {
-    current_SID = ++last_current_SID;
-    ga_grow(&script_items, (int)(current_SID - script_items.ga_len));
-    while (script_items.ga_len < current_SID) {
+  if (current_sctx.sc_sid == 0) {
+    current_sctx.sc_sid = ++last_current_SID;
+    ga_grow(&script_items, (int)(current_sctx.sc_sid - script_items.ga_len));
+    while (script_items.ga_len < current_sctx.sc_sid) {
       script_items.ga_len++;
       SCRIPT_ITEM(script_items.ga_len).sn_name = NULL;
       SCRIPT_ITEM(script_items.ga_len).sn_prof_on = false;
     }
-    si = &SCRIPT_ITEM(current_SID);
+    si = &SCRIPT_ITEM(current_sctx.sc_sid);
     si->sn_name = fname_exp;
     fname_exp = vim_strsave(si->sn_name);  // used for autocmd
     if (file_id_ok) {
@@ -3193,7 +3269,7 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
     }
 
     // Allocate the local script variables to use for this script.
-    new_script_vars(current_SID);
+    new_script_vars(current_sctx.sc_sid);
   }
 
   if (l_do_profiling == PROF_YES) {
@@ -3214,7 +3290,7 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
   cookie.conv.vc_type = CONV_NONE;              // no conversion
 
   // Read the first line so we can check for a UTF-8 BOM.
-  firstline = getsourceline(0, (void *)&cookie, 0);
+  firstline = getsourceline(0, (void *)&cookie, 0, true);
   if (firstline != NULL && STRLEN(firstline) >= 3 && firstline[0] == 0xef
       && firstline[1] == 0xbb && firstline[2] == 0xbf) {
     // Found BOM; setup conversion, skip over BOM and recode the line.
@@ -3234,7 +3310,7 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
 
   if (l_do_profiling == PROF_YES) {
     // Get "si" again, "script_items" may have been reallocated.
-    si = &SCRIPT_ITEM(current_SID);
+    si = &SCRIPT_ITEM(current_sctx.sc_sid);
     if (si->sn_prof_on) {
       si->sn_pr_start = profile_end(si->sn_pr_start);
       si->sn_pr_start = profile_sub_wait(wait_start, si->sn_pr_start);
@@ -3275,7 +3351,7 @@ int do_source(char_u *fname, int check_other, int is_vimrc)
     debug_break_level++;
   }
 
-  current_SID = save_current_SID;
+  current_sctx = save_current_sctx;
   restore_funccal(save_funccalp);
   if (l_do_profiling == PROF_YES) {
     prof_child_exit(&wait_start);    // leaving a child now
@@ -3336,7 +3412,7 @@ char_u *get_scriptname(LastSet last_set, bool *should_free)
 {
   *should_free = false;
 
-  switch (last_set.script_id) {
+  switch (last_set.script_ctx.sc_sid) {
     case SID_MODELINE:
       return (char_u *)_("modeline");
     case SID_CMDARG:
@@ -3354,9 +3430,12 @@ char_u *get_scriptname(LastSet last_set, bool *should_free)
                    _("API client (channel id %" PRIu64 ")"),
                    last_set.channel_id);
       return IObuff;
+    case SID_STR:
+      return (char_u *)_("anonymous :source");
     default:
       *should_free = true;
-      return home_replace_save(NULL, SCRIPT_ITEM(last_set.script_id).sn_name);
+      return home_replace_save(NULL,
+                               SCRIPT_ITEM(last_set.script_ctx.sc_sid).sn_name);
   }
 }
 
@@ -3370,13 +3449,20 @@ void free_scriptnames(void)
 }
 # endif
 
+linenr_T get_sourced_lnum(LineGetter fgetline, void *cookie)
+{
+    return fgetline == getsourceline
+        ? ((struct source_cookie *)cookie)->sourcing_lnum
+        : sourcing_lnum;
+}
+
 
 /// Get one full line from a sourced file.
 /// Called by do_cmdline() when it's called from do_source().
 ///
 /// @return pointer to the line in allocated memory, or NULL for end-of-file or
 ///         some error.
-char_u *getsourceline(int c, void *cookie, int indent)
+char_u *getsourceline(int c, void *cookie, int indent, bool do_concat)
 {
   struct source_cookie *sp = (struct source_cookie *)cookie;
   char_u *line;
@@ -3390,6 +3476,8 @@ char_u *getsourceline(int c, void *cookie, int indent)
   if (do_profiling == PROF_YES) {
     script_line_end();
   }
+  // Set the current sourcing line number.
+  sourcing_lnum = sp->sourcing_lnum + 1;
   // Get current line.  If there is a read-ahead line, use it, otherwise get
   // one now.
   if (sp->finished) {
@@ -3399,7 +3487,7 @@ char_u *getsourceline(int c, void *cookie, int indent)
   } else {
     line = sp->nextline;
     sp->nextline = NULL;
-    sourcing_lnum++;
+    sp->sourcing_lnum++;
   }
   if (line != NULL && do_profiling == PROF_YES) {
     script_line_start();
@@ -3407,9 +3495,9 @@ char_u *getsourceline(int c, void *cookie, int indent)
 
   // Only concatenate lines starting with a \ when 'cpoptions' doesn't
   // contain the 'C' flag.
-  if (line != NULL && (vim_strchr(p_cpo, CPO_CONCAT) == NULL)) {
+  if (line != NULL && do_concat && (vim_strchr(p_cpo, CPO_CONCAT) == NULL)) {
     // compensate for the one line read-ahead
-    sourcing_lnum--;
+    sp->sourcing_lnum--;
 
     // Get the next line and concatenate it when it starts with a
     // backslash. We always need to read the next line, keep it in
@@ -3487,7 +3575,7 @@ static char_u *get_one_sourceline(struct source_cookie *sp)
   ga_init(&ga, 1, 250);
 
   // Loop until there is a finished line (or end-of-file).
-  sourcing_lnum++;
+  sp->sourcing_lnum++;
   for (;; ) {
     // make room to read at least 120 (more) characters
     ga_grow(&ga, 120);
@@ -3554,7 +3642,7 @@ retry:
       // len&c parities (is faster than ((len-c)%2 == 0)) -- Acevedo
       for (c = len - 2; c >= 0 && buf[c] == Ctrl_V; c--) {}
       if ((len & 1) != (c & 1)) {       // escaped NL, read more
-        sourcing_lnum++;
+        sp->sourcing_lnum++;
         continue;
       }
 
@@ -3583,10 +3671,10 @@ void script_line_start(void)
   scriptitem_T    *si;
   sn_prl_T        *pp;
 
-  if (current_SID <= 0 || current_SID > script_items.ga_len) {
+  if (current_sctx.sc_sid <= 0 || current_sctx.sc_sid > script_items.ga_len) {
     return;
   }
-  si = &SCRIPT_ITEM(current_SID);
+  si = &SCRIPT_ITEM(current_sctx.sc_sid);
   if (si->sn_prof_on && sourcing_lnum >= 1) {
     // Grow the array before starting the timer, so that the time spent
     // here isn't counted.
@@ -3614,10 +3702,10 @@ void script_line_exec(void)
 {
   scriptitem_T    *si;
 
-  if (current_SID <= 0 || current_SID > script_items.ga_len) {
+  if (current_sctx.sc_sid <= 0 || current_sctx.sc_sid > script_items.ga_len) {
     return;
   }
-  si = &SCRIPT_ITEM(current_SID);
+  si = &SCRIPT_ITEM(current_sctx.sc_sid);
   if (si->sn_prof_on && si->sn_prl_idx >= 0) {
     si->sn_prl_execed = true;
   }
@@ -3629,10 +3717,10 @@ void script_line_end(void)
   scriptitem_T    *si;
   sn_prl_T        *pp;
 
-  if (current_SID <= 0 || current_SID > script_items.ga_len) {
+  if (current_sctx.sc_sid <= 0 || current_sctx.sc_sid > script_items.ga_len) {
     return;
   }
-  si = &SCRIPT_ITEM(current_SID);
+  si = &SCRIPT_ITEM(current_sctx.sc_sid);
   if (si->sn_prof_on && si->sn_prl_idx >= 0
       && si->sn_prl_idx < si->sn_prl_ga.ga_len) {
     if (si->sn_prl_execed) {

@@ -35,7 +35,6 @@ describe('highlight: `:syntax manual`', function()
   end)
 
   after_each(function()
-    screen:detach()
     os.remove('Xtest-functional-ui-highlight.tmp.vim')
   end)
 
@@ -95,10 +94,6 @@ describe('highlight defaults', function()
     screen = Screen.new()
     screen:attach()
     command("set display-=msgsep")
-  end)
-
-  after_each(function()
-    screen:detach()
   end)
 
   it('window status bar', function()
@@ -346,17 +341,10 @@ describe('highlight defaults', function()
 end)
 
 describe('highlight', function()
-  local screen
-
-  before_each(function()
-    clear()
-    screen = Screen.new(25,10)
-    screen:attach()
-  end)
+  before_each(clear)
 
   it('visual', function()
-    screen:detach()
-    screen = Screen.new(20,4)
+    local screen = Screen.new(20,4)
     screen:attach()
     screen:set_default_attr_ids({
       [1] = {background = Screen.colors.LightGrey},
@@ -389,8 +377,7 @@ describe('highlight', function()
   end)
 
   it('cterm=standout gui=standout', function()
-    screen:detach()
-    screen = Screen.new(20,5)
+    local screen = Screen.new(20,5)
     screen:attach()
     screen:set_default_attr_ids({
         [1] = {bold = true, foreground = Screen.colors.Blue1},
@@ -412,7 +399,81 @@ describe('highlight', function()
     ]])
   end)
 
+  it('strikethrough', function()
+    local screen = Screen.new(25,6)
+    screen:attach()
+    feed_command('syntax on')
+    feed_command('syn keyword TmpKeyword foo')
+    feed_command('hi! Awesome cterm=strikethrough gui=strikethrough')
+    feed_command('hi link TmpKeyword Awesome')
+    insert([[
+      foo
+      foo bar
+      foobarfoobar
+      ]])
+    screen:expect([[
+      {1:foo}                      |
+      {1:foo} bar                  |
+      foobarfoobar             |
+      ^                         |
+      {2:~                        }|
+                               |
+    ]],{
+      [1] = {strikethrough = true},
+      [2] = {bold = true, foreground = Screen.colors.Blue1},
+    })
+  end)
+
+  it('nocombine', function()
+    local screen = Screen.new(25,6)
+    screen:set_default_attr_ids{
+      [1] = {foreground = Screen.colors.SlateBlue, underline = true},
+      [2] = {bold = true, foreground = Screen.colors.Blue1},
+      [3] = {underline = true, reverse = true, foreground = Screen.colors.SlateBlue},
+      [4] = {background = Screen.colors.Yellow, reverse = true, foreground = Screen.colors.SlateBlue},
+      [5] = {foreground = Screen.colors.Red},
+    }
+    screen:attach()
+    feed_command('syntax on')
+    feed_command('hi! Underlined cterm=underline gui=underline')
+    feed_command('syn keyword Underlined foobar')
+    feed_command('hi Search cterm=inverse,nocombine gui=inverse,nocombine')
+    insert([[
+      foobar
+      foobar
+      ]])
+    screen:expect{grid=[[
+      {1:foobar}                   |
+      {1:foobar}                   |
+      ^                         |
+      {2:~                        }|
+      {2:~                        }|
+                               |
+    ]]}
+
+    feed('/foo')
+    screen:expect{grid=[[
+      {3:foo}{1:bar}                   |
+      {4:foo}{1:bar}                   |
+                               |
+      {2:~                        }|
+      {2:~                        }|
+      /foo^                     |
+    ]]}
+    feed('<cr>')
+    screen:expect{grid=[[
+      {4:^foo}{1:bar}                   |
+      {4:foo}{1:bar}                   |
+                               |
+      {2:~                        }|
+      {2:~                        }|
+      {5:search hit...uing at TOP} |
+    ]]}
+  end)
+
   it('guisp (special/undercurl)', function()
+    local screen = Screen.new(25,10)
+    screen:attach()
     feed_command('syntax on')
     feed_command('syn keyword TmpKeyword neovim')
     feed_command('syn keyword TmpKeyword1 special')
@@ -466,10 +527,6 @@ describe("'listchars' highlight", function()
     clear()
     screen = Screen.new(20,5)
     screen:attach()
-  end)
-
-  after_each(function()
-    screen:detach()
   end)
 
   it("'cursorline' and 'cursorcolumn'", function()
@@ -628,6 +685,30 @@ describe("'listchars' highlight", function()
       {3:^¬}{1:                   }|
       {4:~                   }|
       :set cursorline     |
+    ]])
+  end)
+
+  it("'listchar' with wrap", function()
+    screen:set_default_attr_ids({
+      [0] = {bold=true, foreground=Screen.colors.Blue},
+    })
+    feed_command('set wrap')
+    feed_command('set listchars=eol:¬,precedes:< list')
+    feed('90ia<esc>')
+    screen:expect([[
+      {0:<}aaaaaaaaaaaaaaaaaaa|
+      aaaaaaaaaaaaaaaaaaaa|
+      aaaaaaaaaaaaaaaaaaaa|
+      aaaaaaaaa^a{0:¬}         |
+                          |
+    ]])
+    feed('0')
+    screen:expect([[
+      ^aaaaaaaaaaaaaaaaaaaa|
+      aaaaaaaaaaaaaaaaaaaa|
+      aaaaaaaaaaaaaaaaaaaa|
+      aaaaaaaaaaaaaaaaaaaa|
+                          |
     ]])
   end)
 
@@ -933,17 +1014,29 @@ end)
 
 
 describe("MsgSeparator highlight and msgsep fillchar", function()
-  before_each(clear)
-  it("works", function()
-    local screen = Screen.new(50,5)
+  local screen
+  before_each(function()
+    clear()
+    screen = Screen.new(50,5)
     screen:set_default_attr_ids({
       [1] = {bold=true, foreground=Screen.colors.Blue},
       [2] = {bold=true, reverse=true},
       [3] = {bold = true, foreground = Screen.colors.SeaGreen4},
       [4] = {background = Screen.colors.Cyan, bold = true, reverse = true},
-      [5] = {bold = true, background = Screen.colors.Magenta}
+      [5] = {bold = true, background = Screen.colors.Magenta},
+      [6] = {background = Screen.colors.WebGray},
+      [7] = {background = Screen.colors.WebGray, bold = true, foreground = Screen.colors.SeaGreen4},
+      [8] = {foreground = Screen.colors.Grey0, background = Screen.colors.Gray60},
+      [9] = {foreground = Screen.colors.Grey40, background = Screen.colors.Gray60},
+      [10] = {foreground = tonumber('0x000019'), background = Screen.colors.Gray60},
+      [11] = {background = Screen.colors.Gray60, bold = true, foreground = tonumber('0x666699')},
+      [12] = {background = Screen.colors.Gray60, bold = true, foreground = tonumber('0x297d4e')},
+      [13] = {background = tonumber('0xff4cff'), bold = true, foreground = tonumber('0xb200ff')},
     })
     screen:attach()
+  end)
+
+  it("works", function()
 
     -- defaults
     feed_command("ls")
@@ -999,6 +1092,61 @@ describe("MsgSeparator highlight and msgsep fillchar", function()
         1 %a   "[No Name]"                    line 1    |
       {3:Press ENTER or type command to continue}^           |
     ]])
+  end)
+
+  it("and MsgArea", function()
+    feed_command("hi MsgArea guibg=Gray")
+    screen:expect{grid=[[
+      ^                                                  |
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {6:                                                  }|
+    ]]}
+    feed(":ls")
+    screen:expect{grid=[[
+                                                        |
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {6::ls^                                               }|
+    ]]}
+    feed(":<cr>")
+    screen:expect{grid=[[
+                                                        |
+      {2:                                                  }|
+      {6::ls:                                              }|
+      {6:  1 %a   "[No Name]"                    line 1    }|
+      {7:Press ENTER or type command to continue}{6:^           }|
+    ]]}
+
+    -- support madness^Wblending of message "overlay"
+    feed_command("hi MsgArea blend=20")
+    feed_command("hi clear MsgSeparator")
+    feed_command("hi MsgSeparator blend=30 guibg=Magenta")
+    screen:expect{grid=[[
+      ^                                                  |
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {8::hi}{9: }{8:MsgSeparator}{9: }{8:blend=30}{9: }{8:guibg=Magenta}{9:           }|
+    ]]}
+    feed(":ls")
+    screen:expect{grid=[[
+                                                        |
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {1:~                                                 }|
+      {8::ls}{9:^                                               }|
+    ]]}
+    feed("<cr>")
+    screen:expect{grid=[[
+                                                        |
+      {13:~                                                 }|
+      {10::ls}{11:                                               }|
+      {11:~ }{10:1}{11: }{10:%a}{11:   }{10:"[No}{11: }{10:Name]"}{11:                    }{10:line}{11: }{10:1}{11:    }|
+      {12:Press}{9: }{12:ENTER}{9: }{12:or}{9: }{12:type}{9: }{12:command}{9: }{12:to}{9: }{12:continue}{9:^           }|
+    ]]}
   end)
 end)
 

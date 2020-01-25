@@ -1200,6 +1200,7 @@ void tv_dict_watcher_notify(dict_T *const dict, const char *const key,
 
   typval_T rettv;
 
+  dict->dv_refcount++;
   QUEUE *w;
   QUEUE_FOREACH(w, &dict->watchers) {
     DictWatcher *watcher = tv_dict_watcher_node_data(w);
@@ -1211,6 +1212,7 @@ void tv_dict_watcher_notify(dict_T *const dict, const char *const key,
       tv_clear(&rettv);
     }
   }
+  tv_dict_unref(dict);
 
   for (size_t i = 1; i < ARRAY_SIZE(argv); i++) {
     tv_clear(argv + i);
@@ -1304,7 +1306,7 @@ void tv_dict_item_remove(dict_T *const dict, dictitem_T *const item)
 dict_T *tv_dict_alloc(void)
   FUNC_ATTR_NONNULL_RET FUNC_ATTR_WARN_UNUSED_RESULT
 {
-  dict_T *const d = xmalloc(sizeof(dict_T));
+  dict_T *const d = xcalloc(1, sizeof(dict_T));
 
   // Add the dict to the list of dicts for garbage collection.
   if (gc_first_dict != NULL) {
@@ -2730,16 +2732,7 @@ varnumber_T tv_get_number_chk(const typval_T *const tv, bool *const ret_error)
       return n;
     }
     case VAR_SPECIAL: {
-      switch (tv->vval.v_special) {
-        case kSpecialVarTrue: {
-          return 1;
-        }
-        case kSpecialVarFalse:
-        case kSpecialVarNull: {
-          return 0;
-        }
-      }
-      break;
+      return tv->vval.v_special == kSpecialVarTrue ? 1 : 0;
     }
     case VAR_UNKNOWN: {
       emsgf(_(e_intern2), "tv_get_number(UNKNOWN)");

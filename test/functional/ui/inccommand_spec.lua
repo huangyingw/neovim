@@ -16,8 +16,8 @@ local retry = helpers.retry
 local source = helpers.source
 local wait = helpers.wait
 local nvim = helpers.nvim
-local iswin = helpers.iswin
 local sleep = helpers.sleep
+local nvim_dir = helpers.nvim_dir
 
 local default_text = [[
   Inc substitution on
@@ -88,14 +88,14 @@ local function common_setup(screen, inccommand, text)
     })
   end
 
-  command("set inccommand=" .. (inccommand and inccommand or ""))
+  command("set inccommand=" .. (inccommand or ""))
 
   if text then
     insert(text)
   end
 end
 
-describe(":substitute, inccommand=split", function()
+describe(":substitute, inccommand=split interactivity", function()
   before_each(function()
     clear()
     common_setup(nil, "split", default_text)
@@ -556,7 +556,6 @@ describe(":substitute, 'inccommand' preserves undo", function()
         ]])
       end
     end
-    screen:detach()
   end)
 
   it('with undolevels=2', function()
@@ -647,7 +646,6 @@ describe(":substitute, 'inccommand' preserves undo", function()
           Already ...t change |
         ]])
       end
-      screen:detach()
     end
   end)
 
@@ -713,7 +711,6 @@ describe(":substitute, 'inccommand' preserves undo", function()
         Already ...t change |
       ]])
     end
-    screen:detach()
   end)
 
 end)
@@ -726,19 +723,15 @@ describe(":substitute, inccommand=split", function()
     common_setup(screen, "split", default_text .. default_text)
   end)
 
-  after_each(function()
-    screen:detach()
-  end)
-
   it("preserves 'modified' buffer flag", function()
     feed_command("set nomodified")
     feed(":%s/tw")
     screen:expect([[
       Inc substitution on           |
       {12:tw}o lines                     |
+      Inc substitution on           |
+      {12:tw}o lines                     |
                                     |
-      {15:~                             }|
-      {15:~                             }|
       {11:[No Name]                     }|
       |2| {12:tw}o lines                 |
       |4| {12:tw}o lines                 |
@@ -786,6 +779,59 @@ describe(":substitute, inccommand=split", function()
       {15:~                             }|
       :silent tabedit %s/tw/to^      |
     ]])
+    feed('<Esc>')
+
+    -- leading colons
+    feed(':::%s/tw/to')
+    screen:expect{any=[[{12:to}o lines]]}
+    feed('<Esc>')
+    screen:expect{any=[[two lines]]}
+  end)
+
+  it("ignores new-window modifiers when splitting the preview window", function()
+    -- one modifier
+    feed(':topleft %s/tw/to')
+    screen:expect([[
+      Inc substitution on           |
+      {12:to}o lines                     |
+      Inc substitution on           |
+      {12:to}o lines                     |
+                                    |
+      {11:[No Name] [+]                 }|
+      |2| {12:to}o lines                 |
+      |4| {12:to}o lines                 |
+      {15:~                             }|
+      {15:~                             }|
+      {15:~                             }|
+      {15:~                             }|
+      {15:~                             }|
+      {10:[Preview]                     }|
+      :topleft %s/tw/to^             |
+    ]])
+    feed('<Esc>')
+    screen:expect{any=[[two lines]]}
+
+    -- multiple modifiers
+    feed(':topleft vert %s/tw/to')
+    screen:expect([[
+      Inc substitution on           |
+      {12:to}o lines                     |
+      Inc substitution on           |
+      {12:to}o lines                     |
+                                    |
+      {11:[No Name] [+]                 }|
+      |2| {12:to}o lines                 |
+      |4| {12:to}o lines                 |
+      {15:~                             }|
+      {15:~                             }|
+      {15:~                             }|
+      {15:~                             }|
+      {15:~                             }|
+      {10:[Preview]                     }|
+      :topleft vert %s/tw/to^        |
+    ]])
+    feed('<Esc>')
+    screen:expect{any=[[two lines]]}
   end)
 
   it('shows split window when typing the pattern', function()
@@ -793,9 +839,9 @@ describe(":substitute, inccommand=split", function()
     screen:expect([[
       Inc substitution on           |
       {12:tw}o lines                     |
+      Inc substitution on           |
+      {12:tw}o lines                     |
                                     |
-      {15:~                             }|
-      {15:~                             }|
       {11:[No Name] [+]                 }|
       |2| {12:tw}o lines                 |
       |4| {12:tw}o lines                 |
@@ -814,9 +860,9 @@ describe(":substitute, inccommand=split", function()
     screen:expect([[
       Inc substitution on           |
       o lines                       |
+      Inc substitution on           |
+      o lines                       |
                                     |
-      {15:~                             }|
-      {15:~                             }|
       {11:[No Name] [+]                 }|
       |2| o lines                   |
       |4| o lines                   |
@@ -833,9 +879,9 @@ describe(":substitute, inccommand=split", function()
     screen:expect([[
       Inc substitution on           |
       {12:x}o lines                      |
+      Inc substitution on           |
+      {12:x}o lines                      |
                                     |
-      {15:~                             }|
-      {15:~                             }|
       {11:[No Name] [+]                 }|
       |2| {12:x}o lines                  |
       |4| {12:x}o lines                  |
@@ -852,9 +898,9 @@ describe(":substitute, inccommand=split", function()
     screen:expect([[
       Inc substitution on           |
       o lines                       |
+      Inc substitution on           |
+      o lines                       |
                                     |
-      {15:~                             }|
-      {15:~                             }|
       {11:[No Name] [+]                 }|
       |2| o lines                   |
       |4| o lines                   |
@@ -874,9 +920,9 @@ describe(":substitute, inccommand=split", function()
     screen:expect([[
       Inc substitution on           |
       {12:XX}o lines                     |
+      Inc substitution on           |
+      {12:XX}o lines                     |
                                     |
-      {15:~                             }|
-      {15:~                             }|
       {11:[No Name] [+]                 }|
       |2| {12:XX}o lines                 |
       |4| {12:XX}o lines                 |
@@ -938,11 +984,11 @@ describe(":substitute, inccommand=split", function()
     feed(":%s/tw")
     -- 'cursorline' is NOT active during preview.
     screen:expect([[
+      Inc substitution on           |
       {12:tw}o lines                     |
       Inc substitution on           |
       {12:tw}o lines                     |
                                     |
-      {15:~                             }|
       {11:[No Name] [+]                 }|
       |2| {12:tw}o lines                 |
       |4| {12:tw}o lines                 |
@@ -1239,10 +1285,6 @@ describe("inccommand=nosplit", function()
   before_each(function()
     clear()
     common_setup(screen, "nosplit", default_text .. default_text)
-  end)
-
-  after_each(function()
-    if screen then screen:detach() end
   end)
 
   it("works with :smagic, :snomagic", function()
@@ -1718,10 +1760,6 @@ describe("'inccommand' split windows", function()
     screen = Screen.new(40,30)
     common_setup(screen, "split", default_text)
   end
-
-  after_each(function()
-    screen:detach()
-  end)
 
   it('work after more splits', function()
     refresh()
@@ -2205,10 +2243,10 @@ describe(":substitute", function()
 
     feed("/KKK")
     screen:expect([[
+      T T123 T T123 T2T TT T23423424|
+      x                             |
       afa {12:KKK}adf la;lkd {12:KKK}alx      |
                                     |
-      {15:~                             }|
-      {15:~                             }|
       {15:~                             }|
       {11:[No Name] [+]                 }|
       |3| afa {12:KKK}adf la;lkd {12:KKK}alx  |
@@ -2485,9 +2523,9 @@ describe(":substitute", function()
     wait()
     feed([[:%s/\(some\)\@<lt>!thing/one/]])
     screen:expect([[
+      something                     |
       every{12:one}                      |
       someone                       |
-      {15:~                             }|
       {15:~                             }|
       {15:~                             }|
       {11:[No Name] [+]                 }|
@@ -2527,9 +2565,9 @@ describe(":substitute", function()
     wait()
     feed([[:%s/some\(thing\)\@!/every/]])
     screen:expect([[
+      something                     |
+      everything                    |
       {12:every}one                      |
-      {15:~                             }|
-      {15:~                             }|
       {15:~                             }|
       {15:~                             }|
       {11:[No Name] [+]                 }|
@@ -2544,6 +2582,49 @@ describe(":substitute", function()
       :%s/some\(thing\)\@!/every/^   |
     ]])
   end)
+
+  it("doesn't prompt to swap cmd range", function()
+    screen = Screen.new(50, 8) -- wide to avoid hit-enter prompt
+    common_setup(screen, "split", default_text)
+    feed(':2,1s/tw/MO/g')
+
+    -- substitution preview should have been made, without prompting
+    screen:expect([[
+      {12:MO}o lines                                         |
+      {11:[No Name] [+]                                     }|
+      |2| {12:MO}o lines                                     |
+      {15:~                                                 }|
+      {15:~                                                 }|
+      {15:~                                                 }|
+      {10:[Preview]                                         }|
+      :2,1s/tw/MO/g^                                     |
+    ]])
+
+    -- but should be prompted on hitting enter
+    feed('<CR>')
+    screen:expect([[
+      {12:MO}o lines                                         |
+      {11:[No Name] [+]                                     }|
+      |2| {12:MO}o lines                                     |
+      {15:~                                                 }|
+      {15:~                                                 }|
+      {15:~                                                 }|
+      {10:[Preview]                                         }|
+      {13:Backwards range given, OK to swap (y/n)?}^          |
+    ]])
+
+    feed('y')
+    screen:expect([[
+      Inc substitution on                               |
+      ^MOo lines                                         |
+                                                        |
+      {15:~                                                 }|
+      {15:~                                                 }|
+      {15:~                                                 }|
+      {15:~                                                 }|
+      {13:Backwards range given, OK to swap (y/n)?}y         |
+    ]])
+  end)
 end)
 
 it(':substitute with inccommand during :terminal activity', function()
@@ -2555,56 +2636,18 @@ it(':substitute with inccommand during :terminal activity', function()
     clear()
 
     command("set cmdwinheight=3")
-    if iswin() then
-      feed([[:terminal for /L \%I in (1,1,5000) do @(echo xxx & echo xxx & echo xxx)<cr>]])
-    else
-      feed([[:terminal for i in $(seq 1 5000); do printf 'xxx\nxxx\nxxx\n'; done<cr>]])
-    end
+    feed([[:terminal "]]..nvim_dir..[[/shell-test" REP 5000 xxx<cr>]])
     command('file term')
+    feed('G')  -- Follow :terminal output.
     command('new')
     common_setup(screen, 'split', 'foo bar baz\nbar baz fox\nbar foo baz')
     command('wincmd =')
 
-    -- Wait for terminal output.
-    screen:expect([[
-      bar baz fox                   |
-      bar foo ba^z                   |
-      {15:~                             }|
-      {15:~                             }|
-      {15:~                             }|
-      {15:~                             }|
-      {11:[No Name] [+]                 }|
-      xxx                           |
-      xxx                           |
-      xxx                           |
-      xxx                           |
-      xxx                           |
-      xxx                           |
-      {10:term                          }|
-                                    |
-    ]])
-
     feed('gg')
     feed(':%s/foo/ZZZ')
     sleep(20)  -- Allow some terminal activity.
-    screen:expect([[
-      {12:ZZZ} bar baz                   |
-      bar baz fox                   |
-      bar {12:ZZZ} baz                   |
-      {15:~                             }|
-      {15:~                             }|
-      {15:~                             }|
-      {11:[No Name] [+]                 }|
-      xxx                           |
-      xxx                           |
-      {10:term                          }|
-      |1| {12:ZZZ} bar baz               |
-      |3| bar {12:ZZZ} baz               |
-      {15:~                             }|
-      {10:[Preview]                     }|
-      :%s/foo/ZZZ^                   |
-    ]])
-
+    helpers.wait()
+    screen:expect_unchanged()
   end)
 end)
 

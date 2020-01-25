@@ -10,6 +10,7 @@
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/handle.h"
+#include "nvim/api/vim.h"
 #include "nvim/msgpack_rpc/helpers.h"
 #include "nvim/lua/executor.h"
 #include "nvim/ascii.h"
@@ -23,6 +24,7 @@
 #include "nvim/eval/typval.h"
 #include "nvim/map_defs.h"
 #include "nvim/map.h"
+#include "nvim/extmark.h"
 #include "nvim/option.h"
 #include "nvim/option_defs.h"
 #include "nvim/version.h"
@@ -125,6 +127,7 @@ bool try_end(Error *err)
 
   // Set by emsg(), affects aborting().  See also enter_cleanup().
   did_emsg = false;
+  force_abort = false;
 
   if (got_int) {
     if (current_exception) {
@@ -390,15 +393,19 @@ void set_option_to(uint64_t channel_id, void *to, int type,
     stringval = (char *)value.data.string.data;
   }
 
-  const scid_T save_current_SID = current_SID;
-  current_SID = channel_id == LUA_INTERNAL_CALL ? SID_LUA : SID_API_CLIENT;
+  const sctx_T save_current_sctx = current_sctx;
+  current_sctx.sc_sid =
+    channel_id == LUA_INTERNAL_CALL ? SID_LUA : SID_API_CLIENT;
+  current_sctx.sc_lnum = 0;
   current_channel_id = channel_id;
 
-  const int opt_flags = (type == SREQ_GLOBAL) ? OPT_GLOBAL : OPT_LOCAL;
+  const int opt_flags = (type == SREQ_WIN && !(flags & SOPT_GLOBAL))
+                        ? 0 : (type == SREQ_GLOBAL)
+                              ? OPT_GLOBAL : OPT_LOCAL;
   set_option_value_for(name.data, numval, stringval,
                        opt_flags, type, to, err);
 
-  current_SID = save_current_SID;
+  current_sctx = save_current_sctx;
 }
 
 #define TYPVAL_ENCODE_ALLOW_SPECIALS false
@@ -624,7 +631,7 @@ buf_T *find_buffer_by_handle(Buffer buffer, Error *err)
   buf_T *rv = handle_get_buffer(buffer);
 
   if (!rv) {
-    api_set_error(err, kErrorTypeValidation, "Invalid buffer id");
+    api_set_error(err, kErrorTypeValidation, "Invalid buffer id: %d", buffer);
   }
 
   return rv;
@@ -639,7 +646,7 @@ win_T *find_window_by_handle(Window window, Error *err)
   win_T *rv = handle_get_window(window);
 
   if (!rv) {
-    api_set_error(err, kErrorTypeValidation, "Invalid window id");
+    api_set_error(err, kErrorTypeValidation, "Invalid window id: %d", window);
   }
 
   return rv;
@@ -654,7 +661,7 @@ tabpage_T *find_tab_by_handle(Tabpage tabpage, Error *err)
   tabpage_T *rv = handle_get_tabpage(tabpage);
 
   if (!rv) {
-    api_set_error(err, kErrorTypeValidation, "Invalid tabpage id");
+    api_set_error(err, kErrorTypeValidation, "Invalid tabpage id: %d", tabpage);
   }
 
   return rv;
@@ -743,6 +750,48 @@ String ga_take_string(garray_T *ga)
   ga->ga_len = 0;
   ga->ga_maxlen = 0;
   return str;
+}
+
+/// Creates "readfile()-style" ArrayOf(String) from a binary string.
+///
+/// - Lines break at \n (NL/LF/line-feed).
+/// - NUL bytes are replaced with NL.
+/// - If the last byte is a linebreak an extra empty list item is added.
+///
+/// @param input  Binary string
+/// @param crlf  Also break lines at CR and CRLF.
+/// @return [allocated] String array
+Array string_to_array(const String input, bool crlf)
+{
+  Array ret = ARRAY_DICT_INIT;
+  for (size_t i = 0; i < input.size; i++) {
+    const char *start = input.data + i;
+    const char *end = start;
+    size_t line_len = 0;
+    for (; line_len < input.size - i; line_len++) {
+      end = start + line_len;
+      if (*end == NL || (crlf && *end == CAR)) {
+        break;
+      }
+    }
+    i += line_len;
+    if (crlf && *end == CAR && i + 1 < input.size && *(end + 1) == NL) {
+      i += 1;  // Advance past CRLF.
+    }
+    String s = {
+      .size = line_len,
+      .data = xmemdupz(start, line_len),
+    };
+    memchrsub(s.data, NUL, NL, line_len);
+    ADD(ret, STRING_OBJ(s));
+    // If line ends at end-of-buffer, add empty final item.
+    // This is "readfile()-style", see also ":help channel-lines".
+    if (i + 1 == input.size && (*end == NL || (crlf && *end == CAR))) {
+      ADD(ret, STRING_OBJ(STRING_INIT));
+    }
+  }
+
+  return ret;
 }
 
 /// Set, tweak, or remove a mapping in a mode. Acts as the implementation for
@@ -1316,6 +1365,9 @@ Dictionary copy_dictionary(Dictionary dict)
 Object copy_object(Object obj)
 {
   switch (obj.type) {
+    case kObjectTypeBuffer:
+    case kObjectTypeTabpage:
+    case kObjectTypeWindow:
     case kObjectTypeNil:
     case kObjectTypeBoolean:
     case kObjectTypeInteger:
@@ -1457,4 +1509,73 @@ ArrayOf(Dictionary) keymap_array(String mode, buf_T *buf)
   tv_dict_free(dict);
 
   return mappings;
+}
+
+// Is the Namespace in use?
+bool ns_initialized(uint64_t ns)
+{
+  if (ns < 1) {
+    return false;
+  }
+  return ns < (uint64_t)next_namespace_id;
+}
+
+/// Gets the line and column of an extmark.
+///
+/// Extmarks may be queried by position, name or even special names
+/// in the future such as "cursor".
+///
+/// @param[out] lnum extmark line
+/// @param[out] colnr extmark column
+///
+/// @return true if the extmark was found, else false
+bool extmark_get_index_from_obj(buf_T *buf, Integer ns_id, Object obj, int
+                                *row, colnr_T *col, Error *err)
+{
+  // Check if it is mark id
+  if (obj.type == kObjectTypeInteger) {
+    Integer id = obj.data.integer;
+    if (id == 0) {
+        *row = 0;
+        *col = 0;
+        return true;
+    } else if (id == -1) {
+        *row = MAXLNUM;
+        *col = MAXCOL;
+        return true;
+    } else if (id < 0) {
+      api_set_error(err, kErrorTypeValidation, _("Mark id must be positive"));
+      return false;
+    }
+
+    ExtmarkInfo extmark = extmark_from_id(buf, (uint64_t)ns_id, (uint64_t)id);
+    if (extmark.row >= 0) {
+      *row = extmark.row;
+      *col = extmark.col;
+      return true;
+    } else {
+      api_set_error(err, kErrorTypeValidation, _("No mark with requested id"));
+      return false;
+    }
+
+  // Check if it is a position
+  } else if (obj.type == kObjectTypeArray) {
+    Array pos = obj.data.array;
+    if (pos.size != 2
+        || pos.items[0].type != kObjectTypeInteger
+        || pos.items[1].type != kObjectTypeInteger) {
+      api_set_error(err, kErrorTypeValidation,
+                    _("Position must have 2 integer elements"));
+      return false;
+    }
+    Integer pos_row = pos.items[0].data.integer;
+    Integer pos_col = pos.items[1].data.integer;
+    *row = (int)(pos_row >= 0 ? pos_row  : MAXLNUM);
+    *col = (colnr_T)(pos_col >= 0 ? pos_col : MAXCOL);
+    return true;
+  } else {
+    api_set_error(err, kErrorTypeValidation,
+                  _("Position must be a mark id Integer or position Array"));
+    return false;
+  }
 }

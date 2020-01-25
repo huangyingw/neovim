@@ -28,6 +28,7 @@
 #include "nvim/indent.h"
 #include "nvim/indent_c.h"
 #include "nvim/main.h"
+#include "nvim/extmark.h"
 #include "nvim/mbyte.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
@@ -637,7 +638,7 @@ static int insert_check(VimState *state)
 
 static int insert_execute(VimState *state, int key)
 {
-  if (key == K_IGNORE) {
+  if (key == K_IGNORE || key == K_NOP) {
     return -1;  // get another key
   }
   InsertState *s = (InsertState *)state;
@@ -674,7 +675,8 @@ static int insert_execute(VimState *state, int key)
       // there is nothing to add, CTRL-L works like CTRL-P then.
       if (s->c == Ctrl_L
           && (!CTRL_X_MODE_LINE_OR_EVAL(ctrl_x_mode)
-              || (compl_shown_match->cp_str != NULL
+              || (compl_shown_match != NULL
+                  && compl_shown_match->cp_str != NULL
                   && (int)STRLEN(compl_shown_match->cp_str)
                   > curwin->w_cursor.col - compl_col))) {
         ins_compl_addfrommatch();
@@ -1232,6 +1234,7 @@ normalchar:
       // Unmapped ALT/META chord behaves like ESC+c. #8213
       stuffcharReadbuff(ESC);
       stuffcharReadbuff(s->c);
+      u_sync(false);
       break;
     }
 
@@ -1823,10 +1826,13 @@ change_indent (
 
     /* We only put back the new line up to the cursor */
     new_line[curwin->w_cursor.col] = NUL;
+    int new_col = curwin->w_cursor.col;
 
     // Put back original line
     ml_replace(curwin->w_cursor.lnum, orig_line, false);
     curwin->w_cursor.col = orig_col;
+
+    curbuf_splice_pending++;
 
     /* Backspace from cursor to start of line */
     backspace_until_column(0);
@@ -1835,6 +1841,16 @@ change_indent (
     ins_bytes(new_line);
 
     xfree(new_line);
+
+    curbuf_splice_pending--;
+
+    // TODO(bfredl): test for crazy edge cases, like we stand on a TAB or
+    // something? does this even do the right text change then?
+    int delta = orig_col - new_col;
+    extmark_splice(curbuf, curwin->w_cursor.lnum-1, new_col,
+                   0, delta < 0 ? -delta : 0,
+                   0, delta > 0 ? delta : 0,
+                   kExtmarkUndo);
   }
 }
 
@@ -3047,7 +3063,9 @@ static void ins_compl_clear(void)
   XFREE_CLEAR(compl_orig_text);
   compl_enter_selects = false;
   // clear v:completed_item
-  set_vim_var_dict(VV_COMPLETED_ITEM, tv_dict_alloc());
+  dict_T *const d = tv_dict_alloc();
+  d->dv_lock = VAR_FIXED;
+  set_vim_var_dict(VV_COMPLETED_ITEM, d);
 }
 
 /// Check that Insert completion is active.
@@ -3331,7 +3349,7 @@ static void ins_compl_addfrommatch(void)
   int len = (int)curwin->w_cursor.col - (int)compl_col;
   int c;
   compl_T     *cp;
-
+  assert(compl_shown_match != NULL);
   p = compl_shown_match->cp_str;
   if ((int)STRLEN(p) <= len) {   /* the match is too short */
     /* When still at the original match use the first entry that matches
@@ -3367,6 +3385,7 @@ static bool ins_compl_prep(int c)
 {
   char_u *ptr;
   bool retval = false;
+  const int prev_mode = ctrl_x_mode;
 
   /* Forget any previous 'special' messages if this is actually
    * a ^X mode key - bar ^R, in which case we wait to see what it gives us.
@@ -3575,6 +3594,18 @@ static bool ins_compl_prep(int c)
 
       auto_format(FALSE, TRUE);
 
+      {
+        const int new_mode = ctrl_x_mode;
+
+        // Trigger the CompleteDone event to give scripts a chance to
+        // act upon the completion.  Do this before clearing the info,
+        // and restore ctrl_x_mode, so that complete_info() can be
+        // used.
+        ctrl_x_mode = prev_mode;
+        ins_apply_autocmds(EVENT_COMPLETEDONE);
+        ctrl_x_mode = new_mode;
+      }
+
       ins_compl_free();
       compl_started = false;
       compl_matches = 0;
@@ -3599,9 +3630,6 @@ static bool ins_compl_prep(int c)
        */
       if (want_cindent && in_cinkeys(KEY_COMPLETE, ' ', inindent(0)))
         do_c_expr_indent();
-      /* Trigger the CompleteDone event to give scripts a chance to act
-       * upon the completion. */
-      ins_apply_autocmds(EVENT_COMPLETEDONE);
     }
   } else if (ctrl_x_mode == CTRL_X_LOCAL_MSG)
     /* Trigger the CompleteDone event to give scripts a chance to act
@@ -3721,7 +3749,7 @@ expand_by_function(
   curbuf_save = curbuf;
 
   // Call a function, which returns a list or dict.
-  if (call_vim_function(funcname, 2, args, &rettv, false) == OK) {
+  if (call_vim_function(funcname, 2, args, &rettv) == OK) {
     switch (rettv.v_type) {
     case VAR_LIST:
       matchlist = rettv.vval.v_list;
@@ -3729,6 +3757,8 @@ expand_by_function(
     case VAR_DICT:
       matchdict = rettv.vval.v_dict;
       break;
+    case VAR_SPECIAL:
+      FALLTHROUGH;
     default:
       // TODO(brammool): Give error message?
       tv_clear(&rettv);
@@ -4046,12 +4076,14 @@ static int ins_compl_get_exp(pos_T *ini)
 
       // Find up to TAG_MANY matches.  Avoids that an enormous number
       // of matches is found when compl_pattern is empty
+      g_tag_at_cursor = true;
       if (find_tags(compl_pattern, &num_matches, &matches,
                     TAG_REGEXP | TAG_NAMES | TAG_NOIC | TAG_INS_COMP
                     | (l_ctrl_x_mode != CTRL_X_NORMAL ? TAG_VERBOSE : 0),
                     TAG_MANY, curbuf->b_ffname) == OK && num_matches > 0) {
         ins_compl_add_matches(num_matches, matches, p_ic);
       }
+      g_tag_at_cursor = false;
       p_ic = save_p_ic;
       break;
 
@@ -4115,7 +4147,7 @@ static int ins_compl_get_exp(pos_T *ini)
                                      compl_direction,
                                      compl_pattern, 1L,
                                      SEARCH_KEEP + SEARCH_NFMSG,
-                                     RE_LAST, (linenr_T)0, NULL, NULL);
+                                     RE_LAST, NULL);
         }
         msg_silent--;
         if (!compl_started || set_match_pos) {
@@ -4302,7 +4334,9 @@ static void ins_compl_delete(void)
   // causes flicker, thus we can't do that.
   changed_cline_bef_curs();
   // clear v:completed_item
-  set_vim_var_dict(VV_COMPLETED_ITEM, tv_dict_alloc());
+  dict_T *const d = tv_dict_alloc();
+  d->dv_lock = VAR_FIXED;
+  set_vim_var_dict(VV_COMPLETED_ITEM, d);
 }
 
 // Insert the new text being completed.
@@ -4324,6 +4358,7 @@ static dict_T *ins_compl_dict_alloc(compl_T *match)
 {
   // { word, abbr, menu, kind, info }
   dict_T *dict = tv_dict_alloc();
+  dict->dv_lock = VAR_FIXED;
   tv_dict_add_str(
       dict, S_LEN("word"),
       (const char *)EMPTY_IF_NULL(match->cp_str));
@@ -4912,7 +4947,6 @@ static int ins_complete(int c, bool enable_pum)
        * Call user defined function 'completefunc' with "a:findstart"
        * set to 1 to obtain the length of text to use for completion.
        */
-      int col;
       char_u      *funcname;
       pos_T pos;
       win_T       *curwin_save;
@@ -4941,7 +4975,7 @@ static int ins_complete(int c, bool enable_pum)
       pos = curwin->w_cursor;
       curwin_save = curwin;
       curbuf_save = curbuf;
-      col = call_func_retnr(funcname, 2, args, false);
+      int col = call_func_retnr(funcname, 2, args);
 
       State = save_State;
       if (curwin_save != curwin || curbuf_save != curbuf) {
@@ -5188,7 +5222,7 @@ static int ins_complete(int c, bool enable_pum)
     }
   }
 
-  /* Show a message about what (completion) mode we're in. */
+  // Show a message about what (completion) mode we're in.
   showmode();
   if (!shortmess(SHM_COMPLETIONMENU)) {
     if (edit_submode_extra != NULL) {
@@ -5479,10 +5513,10 @@ insertchar (
   if (c == NUL)             /* only formatting was wanted */
     return;
 
-  /* Check whether this character should end a comment. */
+  // Check whether this character should end a comment.
   if (did_ai && c == end_comment_pending) {
     char_u  *line;
-    char_u lead_end[COM_MAX_LEN];           /* end-comment string */
+    char_u lead_end[COM_MAX_LEN];  // end-comment string
     int middle_len, end_len;
     int i;
 
@@ -5490,39 +5524,40 @@ insertchar (
      * Need to remove existing (middle) comment leader and insert end
      * comment leader.  First, check what comment leader we can find.
      */
-    i = get_leader_len(line = get_cursor_line_ptr(), &p, FALSE, TRUE);
-    if (i > 0 && vim_strchr(p, COM_MIDDLE) != NULL) {   /* Just checking */
-      /* Skip middle-comment string */
-      while (*p && p[-1] != ':')        /* find end of middle flags */
-        ++p;
+    i = get_leader_len(line = get_cursor_line_ptr(), &p, false, true);
+    if (i > 0 && vim_strchr(p, COM_MIDDLE) != NULL) {  // Just checking
+      // Skip middle-comment string
+      while (*p && p[-1] != ':') {  // find end of middle flags
+        p++;
+      }
       middle_len = copy_option_part(&p, lead_end, COM_MAX_LEN, ",");
-      /* Don't count trailing white space for middle_len */
-      while (middle_len > 0 && ascii_iswhite(lead_end[middle_len - 1]))
-        --middle_len;
+      // Don't count trailing white space for middle_len
+      while (middle_len > 0 && ascii_iswhite(lead_end[middle_len - 1])) {
+        middle_len--;
+      }
 
-      /* Find the end-comment string */
-      while (*p && p[-1] != ':')        /* find end of end flags */
-        ++p;
+      // Find the end-comment string
+      while (*p && p[-1] != ':') {  // find end of end flags
+        p++;
+      }
       end_len = copy_option_part(&p, lead_end, COM_MAX_LEN, ",");
 
-      /* Skip white space before the cursor */
+      // Skip white space before the cursor
       i = curwin->w_cursor.col;
       while (--i >= 0 && ascii_iswhite(line[i]))
         ;
       i++;
 
-      /* Skip to before the middle leader */
+      // Skip to before the middle leader
       i -= middle_len;
 
-      /* Check some expected things before we go on */
+      // Check some expected things before we go on
       if (i >= 0 && lead_end[end_len - 1] == end_comment_pending) {
-        /* Backspace over all the stuff we want to replace */
+        // Backspace over all the stuff we want to replace
         backspace_until_column(i);
 
-        /*
-         * Insert the end-comment string, except for the last
-         * character, which will get inserted as normal later.
-         */
+        // Insert the end-comment string, except for the last
+        // character, which will get inserted as normal later.
         ins_bytes_len(lead_end, end_len - 1);
       }
     }
@@ -5541,13 +5576,15 @@ insertchar (
   // 'paste' is set)..
   // Don't do this when there an InsertCharPre autocommand is defined,
   // because we need to fire the event for every character.
+  // Do the check for InsertCharPre before the call to vpeekc() because the
+  // InsertCharPre autocommand could change the input buffer.
   if (!ISSPECIAL(c)
       && (!has_mbyte || (*mb_char2len)(c) == 1)
+      && !has_event(EVENT_INSERTCHARPRE)
       && vpeekc() != NUL
       && !(State & REPLACE_FLAG)
       && !cindent_on()
-      && !p_ri
-      && !has_event(EVENT_INSERTCHARPRE)) {
+      && !p_ri) {
 #define INPUT_BUFLEN 100
     char_u buf[INPUT_BUFLEN + 1];
     int i;
@@ -5601,10 +5638,11 @@ insertchar (
       AppendCharToRedobuff(c);
     } else {
       ins_char(c);
-      if (flags & INSCHAR_CTRLV)
+      if (flags & INSCHAR_CTRLV) {
         redo_literal(c);
-      else
+      } else {
         AppendCharToRedobuff(c);
+      }
     }
   }
 }
@@ -6886,8 +6924,9 @@ static void mb_replace_pop_ins(int cc)
     for (i = 1; i < n; ++i)
       buf[i] = replace_pop();
     ins_bytes_len(buf, n);
-  } else
+  } else {
     ins_char(cc);
+  }
 
   if (enc_utf8)
     /* Handle composing chars. */
@@ -7997,9 +8036,9 @@ static bool ins_bs(int c, int mode, int *inserted_space_p)
           Insstart_orig.col = curwin->w_cursor.col;
         }
 
-        if (State & VREPLACE_FLAG)
+        if (State & VREPLACE_FLAG) {
           ins_char(' ');
-        else {
+        } else {
           ins_str((char_u *)" ");
           if ((State & REPLACE_FLAG))
             replace_push(NUL);
@@ -8477,6 +8516,7 @@ static bool ins_tab(void)
   } else {  // otherwise use "tabstop"
     temp = (int)curbuf->b_p_ts;
   }
+
   temp -= get_nolist_virtcol() % temp;
 
   /*
@@ -8486,12 +8526,13 @@ static bool ins_tab(void)
    */
   ins_char(' ');
   while (--temp > 0) {
-    if (State & VREPLACE_FLAG)
+    if (State & VREPLACE_FLAG) {
       ins_char(' ');
-    else {
+    } else {
       ins_str((char_u *)" ");
-      if (State & REPLACE_FLAG)             /* no char replaced */
+      if (State & REPLACE_FLAG) {            // no char replaced
         replace_push(NUL);
+      }
     }
   }
 

@@ -74,6 +74,9 @@ set nomore
 " Output all messages in English.
 lang mess C
 
+" Nvim: append runtime from build dir, which contains the generated doc/tags.
+let &runtimepath .= ','.expand($BUILD_DIR).'/runtime/'
+
 " Always use forward slashes.
 set shellslash
 
@@ -279,18 +282,23 @@ endif
 
 " Names of flaky tests.
 let s:flaky_tests = [
+      \ 'Test_autocmd_SafeState()',
       \ 'Test_cursorhold_insert()',
       \ 'Test_exit_callback_interval()',
       \ 'Test_map_timeout_with_timer_interrupt()',
       \ 'Test_oneshot()',
       \ 'Test_out_cb()',
       \ 'Test_paused()',
+      \ 'Test_popup_and_window_resize()',
       \ 'Test_quoteplus()',
       \ 'Test_quotestar()',
       \ 'Test_reltime()',
       \ 'Test_repeat_many()',
       \ 'Test_repeat_three()',
+      \ 'Test_state()',
       \ 'Test_stop_all_in_callback()',
+      \ 'Test_term_mouse_double_click_to_create_tab',
+      \ 'Test_term_mouse_multiple_clicks_to_visually_select()',
       \ 'Test_terminal_composing_unicode()',
       \ 'Test_terminal_redir_file()',
       \ 'Test_terminal_tmap()',
@@ -309,6 +317,12 @@ let s:tests = split(substitute(@q, 'function \(\k*()\)', '\1', 'g'))
 " If there is an extra argument filter the function names against it.
 if argc() > 1
   let s:tests = filter(s:tests, 'v:val =~ argv(1)')
+endif
+
+" If the environment variable $TEST_FILTER is set then filter the function
+" names against it.
+if $TEST_FILTER != ''
+  let s:tests = filter(s:tests, 'v:val =~ $TEST_FILTER')
 endif
 
 " Execute the tests in alphabetical order.

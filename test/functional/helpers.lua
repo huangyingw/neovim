@@ -1,4 +1,5 @@
 require('coxpcall')
+local busted = require('busted')
 local luv = require('luv')
 local lfs = require('lfs')
 local mpack = require('mpack')
@@ -15,6 +16,7 @@ local check_logs = global_helpers.check_logs
 local dedent = global_helpers.dedent
 local eq = global_helpers.eq
 local filter = global_helpers.filter
+local is_os = global_helpers.is_os
 local map = global_helpers.map
 local ok = global_helpers.ok
 local sleep = global_helpers.sleep
@@ -27,17 +29,15 @@ local module = {
 }
 
 local start_dir = lfs.currentdir()
--- XXX: NVIM_PROG takes precedence, QuickBuild sets it.
 module.nvim_prog = (
-  os.getenv('NVIM_PROG')
-  or os.getenv('NVIM_PRG')
+  os.getenv('NVIM_PRG')
   or global_helpers.test_build_dir .. '/bin/nvim'
 )
 -- Default settings for the test session.
 module.nvim_set = (
-  'set shortmess+=IS background=light noswapfile noautoindent'
+  'set shortmess+=IS background=light noswapfile noautoindent startofline'
   ..' laststatus=1 undodir=. directory=. viewdir=. backupdir=.'
-  ..' belloff= wildoptions-=pum noshowcmd noruler nomore')
+  ..' belloff= wildoptions-=pum noshowcmd noruler nomore redrawdebug=invalid')
 module.nvim_argv = {
   module.nvim_prog, '-u', 'NONE', '-i', 'NONE',
   '--cmd', module.nvim_set, '--embed'}
@@ -48,7 +48,7 @@ if module.nvim_dir == module.nvim_prog then
 end
 
 local tmpname = global_helpers.tmpname
-local uname = global_helpers.uname
+local iswin = global_helpers.iswin
 local prepend_argv
 
 if os.getenv('VALGRIND') then
@@ -186,7 +186,12 @@ function module.expect_msg_seq(...)
     if status then
       return result
     end
-    final_error = cat_err(final_error, result)
+    local message = result
+    if type(result) == "table" then
+      -- 'eq' returns several things
+      message = result.message
+    end
+    final_error = cat_err(final_error, message)
   end
   error(final_error)
 end
@@ -271,26 +276,6 @@ function module.eval(expr)
   return module.request('nvim_eval', expr)
 end
 
-module.os_name = (function()
-  local name = nil
-  return (function()
-    if not name then
-      if module.eval('has("win32")') == 1 then
-        name = 'windows'
-      elseif module.eval('has("macunix")') == 1 then
-        name = 'osx'
-      else
-        name = 'unix'
-      end
-    end
-    return name
-  end)
-end)()
-
-function module.iswin()
-  return package.config:sub(1,1) == '\\'
-end
-
 -- Executes a VimL function.
 -- Fails on VimL error, but does not update v:errmsg.
 function module.call(name, ...)
@@ -302,6 +287,10 @@ end
 local function nvim_feed(input)
   while #input > 0 do
     local written = module.request('nvim_input', input)
+    if written == nil then
+      module.assert_alive()
+      error('crash? (nvim_input returned nil)')
+    end
     input = input:sub(written + 1)
   end
 end
@@ -400,7 +389,7 @@ function module.retry(max, max_ms, fn)
     end
     luv.update_time()  -- Update cached value of luv.now() (libuv: uv_now()).
     if (max and tries >= max) or (luv.now() - start_time > timeout) then
-      error("\nretry() attempts: "..tostring(tries).."\n"..tostring(result))
+      busted.fail(string.format("retry() attempts: %d\n%s", tries, tostring(result)), 2)
     end
     tries = tries + 1
     luv.sleep(20)  -- Avoid hot loop...
@@ -452,6 +441,7 @@ function module.new_argv(...)
         'NVIM_LOG_FILE',
         'NVIM_RPLUGIN_MANIFEST',
         'GCOV_ERROR_FILE',
+        'TMPDIR',
       }) do
         if not env_tbl[k] then
           env_tbl[k] = os.getenv(k)
@@ -514,10 +504,21 @@ function module.source(code)
   return fname
 end
 
+function module.has_powershell()
+  return module.eval('executable("'..(iswin() and 'powershell' or 'pwsh')..'")') == 1
+end
+
 function module.set_shell_powershell()
+  local shell = iswin() and 'powershell' or 'pwsh'
+  assert(module.has_powershell())
+  local cmd = 'Remove-Item -Force '..table.concat(iswin()
+    and {'alias:cat', 'alias:echo', 'alias:sleep'}
+    or  {'alias:echo'}, ',')..';'
   module.source([[
-    set shell=powershell shellquote=( shellpipe=\| shellredir=> shellxquote=
-    let &shellcmdflag = '-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -Command Remove-Item -Force alias:sleep; Remove-Item -Force alias:cat;'
+    let &shell = ']]..shell..[['
+    set shellquote= shellpipe=\| shellxquote=
+    let &shellredir = '| Out-File -Encoding UTF8'
+    let &shellcmdflag = '-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -Command ]]..cmd..[['
   ]])
 end
 
@@ -558,6 +559,11 @@ function module.wait()
   session:request('nvim_eval', '1')
 end
 
+function module.buf_lines(bufnr)
+  return module.exec_lua("return vim.api.nvim_buf_get_lines((...), 0, -1, false)", bufnr)
+end
+
+--@see buf_lines()
 function module.curbuf_contents()
   module.wait()  -- Before inspecting the buffer, process all input.
   return table.concat(module.curbuf('get_lines', 0, -1, true), '\n')
@@ -586,9 +592,35 @@ function module.expect_any(contents)
   return ok(nil ~= string.find(module.curbuf_contents(), contents, 1, true))
 end
 
+-- Checks that the Nvim session did not terminate.
+function module.assert_alive()
+  assert(2 == module.eval('1+1'), 'crash? request failed')
+end
+
+-- Asserts that buffer is loaded and visible in the current tabpage.
+function module.assert_visible(bufnr, visible)
+  assert(type(visible) == 'boolean')
+  eq(visible, module.bufmeths.is_loaded(bufnr))
+  if visible then
+    assert(-1 ~= module.funcs.bufwinnr(bufnr),
+      'expected buffer to be visible in current tabpage: '..tostring(bufnr))
+  else
+    assert(-1 == module.funcs.bufwinnr(bufnr),
+      'expected buffer NOT visible in current tabpage: '..tostring(bufnr))
+  end
+end
+
 local function do_rmdir(path)
-  if lfs.attributes(path, 'mode') ~= 'directory' then
-    return  -- Don't complain.
+  local mode, errmsg, errcode = lfs.attributes(path, 'mode')
+  if mode == nil then
+    if errcode == 2 then
+      -- "No such file or directory", don't complain.
+      return
+    end
+    error(string.format('rmdir: %s (%d)', errmsg, errcode))
+  end
+  if mode ~= 'directory' then
+    error(string.format('rmdir: not a directory: %s', path))
   end
   for file in lfs.dir(path) do
     if file ~= '.' and file ~= '..' then
@@ -604,7 +636,7 @@ local function do_rmdir(path)
             -- Try Nvim delete(): it handles `readonly` attribute on Windows,
             -- and avoids Lua cross-version/platform incompatibilities.
             if -1 == module.call('delete', abspath) then
-              local hint = (module.os_name() == 'windows'
+              local hint = (is_os('win')
                 and ' (hint: try :%bwipeout! before rmdir())' or '')
               error('delete() failed'..hint..': '..abspath)
             end
@@ -621,7 +653,7 @@ end
 
 function module.rmdir(path)
   local ret, _ = pcall(do_rmdir, path)
-  if not ret and module.os_name() == "windows" then
+  if not ret and is_os('win') then
     -- Maybe "Permission denied"; try again after changing the nvim
     -- process to the top-level directory.
     module.command([[exe 'cd '.fnameescape(']]..start_dir.."')")
@@ -663,7 +695,7 @@ end
 -- Helper to skip tests. Returns true in Windows systems.
 -- pending_fn is pending() from busted
 function module.pending_win32(pending_fn)
-  if uname() == 'Windows' then
+  if iswin() then
     if pending_fn ~= nil then
       pending_fn('FIXME: Windows', function() end)
     end
@@ -689,16 +721,9 @@ function module.skip_fragile(pending_fn, cond)
   return false
 end
 
-function module.meth_pcall(...)
-  local ret = {pcall(...)}
-  if type(ret[2]) == 'string' then
-    ret[2] = ret[2]:gsub('^[^:]+:%d+: ', '')
-  end
-  return ret
-end
-
 module.funcs = module.create_callindex(module.call)
 module.meths = module.create_callindex(module.nvim)
+module.async_meths = module.create_callindex(module.nvim_async)
 module.uimeths = module.create_callindex(ui)
 module.bufmeths = module.create_callindex(module.buffer)
 module.winmeths = module.create_callindex(module.window)
@@ -708,7 +733,7 @@ module.curwinmeths = module.create_callindex(module.curwin)
 module.curtabmeths = module.create_callindex(module.curtab)
 
 function module.exec_lua(code, ...)
-  return module.meths.execute_lua(code, {...})
+  return module.meths.exec_lua(code, {...})
 end
 
 function module.redir_exec(cmd)
@@ -725,12 +750,12 @@ function module.redir_exec(cmd)
 end
 
 function module.get_pathsep()
-  return module.iswin() and '\\' or '/'
+  return iswin() and '\\' or '/'
 end
 
 function module.pathroot()
   local pathsep = package.config:sub(1,1)
-  return module.iswin() and (module.nvim_dir:sub(1,2)..pathsep) or '/'
+  return iswin() and (module.nvim_dir:sub(1,2)..pathsep) or '/'
 end
 
 -- Returns a valid, platform-independent $NVIM_LISTEN_ADDRESS.
@@ -743,7 +768,7 @@ function module.new_pipename()
 end
 
 function module.missing_provider(provider)
-  if provider == 'ruby' or provider == 'node' then
+  if provider == 'ruby' or provider == 'node' or provider == 'perl' then
     local prog = module.funcs['provider#' .. provider .. '#Detect']()
     return prog == '' and (provider .. ' not detected') or false
   elseif provider == 'python' or provider == 'python3' then
@@ -756,7 +781,7 @@ function module.missing_provider(provider)
 end
 
 function module.alter_slashes(obj)
-  if not module.iswin() then
+  if not iswin() then
     return obj
   end
   if type(obj) == 'string' then
@@ -786,18 +811,30 @@ end
 
 function module.parse_context(ctx)
   local parsed = {}
-  for _, item in ipairs({'regs', 'jumps', 'buflist', 'gvars'}) do
+  for _, item in ipairs({'regs', 'jumps', 'bufs', 'gvars'}) do
     parsed[item] = filter(function(v)
       return type(v) == 'table'
     end, module.call('msgpackparse', ctx[item]))
   end
-  parsed['buflist'] = parsed['buflist'][1]
+  parsed['bufs'] = parsed['bufs'][1]
   return map(function(v)
     if #v == 0 then
       return nil
     end
     return v
   end, parsed)
+end
+
+function module.add_builddir_to_rtp()
+  -- Add runtime from build dir for doc/tags (used with :help).
+  module.command(string.format([[set rtp+=%s/runtime]], module.test_build_dir))
+end
+
+-- Kill process with given pid
+function module.os_kill(pid)
+  return os.execute((iswin()
+    and 'taskkill /f /t /pid '..pid..' > nul'
+    or  'kill -9 '..pid..' > /dev/null'))
 end
 
 module = global_helpers.tbl_extend('error', module, global_helpers)

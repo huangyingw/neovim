@@ -93,14 +93,14 @@ typedef struct {
   int out_fd;
   bool scroll_region_is_full_screen;
   bool can_change_scroll_region;
-  bool can_set_lr_margin;
+  bool can_set_lr_margin;  // smglr
   bool can_set_left_right_margin;
   bool can_scroll;
   bool can_erase_chars;
   bool immediate_wrap_after_last_column;
   bool bce;
   bool mouse_enabled;
-  bool busy, is_invisible;
+  bool busy, is_invisible, want_invisible;
   bool cork, overflow;
   bool cursor_color_changed;
   bool is_starting;
@@ -115,6 +115,7 @@ typedef struct {
     int enable_mouse, disable_mouse;
     int enable_bracketed_paste, disable_bracketed_paste;
     int enable_lr_margin, disable_lr_margin;
+    int enter_strikethrough_mode;
     int set_rgb_foreground, set_rgb_background;
     int set_cursor_color;
     int reset_cursor_color;
@@ -197,6 +198,7 @@ static void terminfo_start(UI *ui)
   data->default_attr = false;
   data->can_clear_attr = false;
   data->is_invisible = true;
+  data->want_invisible = false;
   data->busy = false;
   data->cork = false;
   data->overflow = false;
@@ -208,6 +210,7 @@ static void terminfo_start(UI *ui)
   data->unibi_ext.reset_cursor_color = -1;
   data->unibi_ext.enable_bracketed_paste = -1;
   data->unibi_ext.disable_bracketed_paste = -1;
+  data->unibi_ext.enter_strikethrough_mode = -1;
   data->unibi_ext.enable_lr_margin = -1;
   data->unibi_ext.disable_lr_margin = -1;
   data->unibi_ext.enable_focus_reporting = -1;
@@ -218,7 +221,7 @@ static void terminfo_start(UI *ui)
   data->unibi_ext.reset_cursor_style = -1;
   data->unibi_ext.get_bg = -1;
   data->unibi_ext.set_underline_color = -1;
-  data->out_fd = 1;
+  data->out_fd = STDOUT_FILENO;
   data->out_isatty = os_isatty(data->out_fd);
 
   const char *term = os_getenv("TERM");
@@ -232,7 +235,9 @@ static void terminfo_start(UI *ui)
   // Set up unibilium/terminfo.
   char *termname = NULL;
   if (term) {
+    os_env_var_lock();
     data->ut = unibi_from_term(term);
+    os_env_var_unlock();
     if (data->ut) {
       termname = xstrdup(term);
     }
@@ -294,6 +299,7 @@ static void terminfo_start(UI *ui)
   unibi_out(ui, unibi_keypad_xmit);
   unibi_out(ui, unibi_clear_screen);
   // Ask the terminal to send us the background color.
+  data->input.waiting_for_bg_response = 5;
   unibi_out_ext(ui, data->unibi_ext.get_bg);
   // Enable bracketed paste
   unibi_out_ext(ui, data->unibi_ext.enable_bracketed_paste);
@@ -310,6 +316,7 @@ static void terminfo_start(UI *ui)
     uv_pipe_init(&data->write_loop, &data->output_handle.pipe, 0);
     uv_pipe_open(&data->output_handle.pipe, data->out_fd);
   }
+  flush_buf(ui);
 }
 
 static void terminfo_stop(UI *ui)
@@ -361,6 +368,7 @@ static void tui_terminal_after_startup(UI *ui)
   // Emit this after Nvim startup, not during.  This works around a tmux
   // 2.3 bug(?) which caused slow drawing during startup.  #7649
   unibi_out_ext(ui, data->unibi_ext.enable_focus_reporting);
+  flush_buf(ui);
 }
 
 static void tui_terminal_stop(UI *ui)
@@ -428,9 +436,6 @@ static void tui_main(UIBridgeData *bridge, UI *ui)
   }
   if (!tui_is_stopped(ui)) {
     tui_terminal_after_startup(ui);
-    // Tickle `main_loop` with a dummy event, else the initial "focus-gained"
-    // terminal response may not get processed until user hits a key.
-    loop_schedule_deferred(&main_loop, event_create(tui_dummy_event, 0));
   }
   // "Passive" (I/O-driven) loop: TUI thread "main loop".
   while (!tui_is_stopped(ui)) {
@@ -449,16 +454,12 @@ static void tui_main(UIBridgeData *bridge, UI *ui)
   xfree(data);
 }
 
-static void tui_dummy_event(void **argv)
-{
-}
-
 /// Handoff point between the main (ui_bridge) thread and the TUI thread.
 static void tui_scheduler(Event event, void *d)
 {
   UI *ui = d;
   TUIData *data = ui->data;
-  loop_schedule(data->loop, event);  // `tui_loop` local to tui_main().
+  loop_schedule_fast(data->loop, event);  // `tui_loop` local to tui_main().
 }
 
 #ifdef UNIX
@@ -515,24 +516,13 @@ static void update_attrs(UI *ui, int attr_id)
   }
   data->print_attr_id = attr_id;
   HlAttrs attrs = kv_A(data->attrs, (size_t)attr_id);
-
-  int fg = ui->rgb ? attrs.rgb_fg_color : (attrs.cterm_fg_color - 1);
-  if (fg == -1) {
-    fg = ui->rgb ? data->clear_attrs.rgb_fg_color
-                 : (data->clear_attrs.cterm_fg_color - 1);
-  }
-
-  int bg = ui->rgb ? attrs.rgb_bg_color : (attrs.cterm_bg_color - 1);
-  if (bg == -1) {
-    bg = ui->rgb ? data->clear_attrs.rgb_bg_color
-                 : (data->clear_attrs.cterm_bg_color - 1);
-  }
-
   int attr = ui->rgb ? attrs.rgb_ae_attr : attrs.cterm_ae_attr;
+
   bool bold = attr & HL_BOLD;
   bool italic = attr & HL_ITALIC;
   bool reverse = attr & HL_INVERSE;
   bool standout = attr & HL_STANDOUT;
+  bool strikethrough = attr & HL_STRIKETHROUGH;
 
   bool underline;
   bool undercurl;
@@ -579,6 +569,9 @@ static void update_attrs(UI *ui, int attr_id)
   if (italic) {
     unibi_out(ui, unibi_enter_italics_mode);
   }
+  if (strikethrough && data->unibi_ext.enter_strikethrough_mode != -1) {
+    unibi_out_ext(ui, data->unibi_ext.enter_strikethrough_mode);
+  }
   if (undercurl && data->unibi_ext.set_underline_style != -1) {
     UNIBI_SET_NUM_VAR(data->params[0], 3);
     unibi_out_ext(ui, data->unibi_ext.set_underline_style);
@@ -592,14 +585,29 @@ static void update_attrs(UI *ui, int attr_id)
         unibi_out_ext(ui, data->unibi_ext.set_underline_color);
     }
   }
-  if (ui->rgb) {
+
+  int fg, bg;
+  if (ui->rgb && !(attr & HL_FG_INDEXED)) {
+    fg = ((attrs.rgb_fg_color != -1)
+          ? attrs.rgb_fg_color : data->clear_attrs.rgb_fg_color);
     if (fg != -1) {
       UNIBI_SET_NUM_VAR(data->params[0], (fg >> 16) & 0xff);  // red
       UNIBI_SET_NUM_VAR(data->params[1], (fg >> 8) & 0xff);   // green
       UNIBI_SET_NUM_VAR(data->params[2], fg & 0xff);          // blue
       unibi_out_ext(ui, data->unibi_ext.set_rgb_foreground);
     }
+  } else {
+    fg = (attrs.cterm_fg_color
+          ? attrs.cterm_fg_color - 1 : (data->clear_attrs.cterm_fg_color - 1));
+    if (fg != -1) {
+      UNIBI_SET_NUM_VAR(data->params[0], fg);
+      unibi_out(ui, unibi_set_a_foreground);
+    }
+  }
 
+  if (ui->rgb && !(attr & HL_BG_INDEXED)) {
+    bg = ((attrs.rgb_bg_color != -1)
+          ? attrs.rgb_bg_color : data->clear_attrs.rgb_bg_color);
     if (bg != -1) {
       UNIBI_SET_NUM_VAR(data->params[0], (bg >> 16) & 0xff);  // red
       UNIBI_SET_NUM_VAR(data->params[1], (bg >> 8) & 0xff);   // green
@@ -607,25 +615,24 @@ static void update_attrs(UI *ui, int attr_id)
       unibi_out_ext(ui, data->unibi_ext.set_rgb_background);
     }
   } else {
-    if (fg != -1) {
-      UNIBI_SET_NUM_VAR(data->params[0], fg);
-      unibi_out(ui, unibi_set_a_foreground);
-    }
-
+    bg = (attrs.cterm_bg_color
+          ? attrs.cterm_bg_color - 1 : (data->clear_attrs.cterm_bg_color - 1));
     if (bg != -1) {
       UNIBI_SET_NUM_VAR(data->params[0], bg);
       unibi_out(ui, unibi_set_a_background);
     }
   }
 
+
   data->default_attr = fg == -1 && bg == -1
-    && !bold && !italic && !underline && !undercurl && !reverse && !standout;
+    && !bold && !italic && !underline && !undercurl && !reverse && !standout
+    && !strikethrough;
 
   // Non-BCE terminals can't clear with non-default background color. Some BCE
   // terminals don't support attributes either, so don't rely on it. But assume
   // italic and bold has no effect if there is no text.
   data->can_clear_attr = !reverse && !standout && !underline && !undercurl
-    && (data->bce || bg == -1);
+    && !strikethrough && (data->bce || bg == -1);
 }
 
 static void final_column_wrap(UI *ui)
@@ -1026,7 +1033,11 @@ static void tui_set_mode(UI *ui, ModeShape mode)
 
   if (c.id != 0 && c.id < (int)kv_size(data->attrs) && ui->rgb) {
     HlAttrs aep = kv_A(data->attrs, c.id);
-    if (aep.rgb_ae_attr & HL_INVERSE) {
+
+    data->want_invisible = aep.hl_blend == 100;
+    if (data->want_invisible) {
+      unibi_out(ui, unibi_cursor_invisible);
+    } else if (aep.rgb_ae_attr & HL_INVERSE) {
       // We interpret "inverse" as "default" (no termcode for "inverse"...).
       // Hopefully the user's default cursor color is inverse.
       unibi_out_ext(ui, data->unibi_ext.reset_cursor_color);
@@ -1062,9 +1073,8 @@ static void tui_mode_change(UI *ui, String mode, Integer mode_idx)
 
 static void tui_grid_scroll(UI *ui, Integer g, Integer startrow, Integer endrow,
                             Integer startcol, Integer endcol,
-                            Integer rows, Integer cols)
+                            Integer rows, Integer cols FUNC_ATTR_UNUSED)
 {
-  (void)cols;  // unused
   TUIData *data = ui->data;
   UGrid *grid = &data->grid;
   int top = (int)startrow, bot = (int)endrow-1;
@@ -1595,6 +1605,12 @@ static void patch_terminfo_bugs(TUIData *data, const char *term,
       unibi_set_if_empty(ut, unibi_set_lr_margin, "\x1b[%i%p1%d;%p2%ds");
       unibi_set_if_empty(ut, unibi_set_left_margin_parm, "\x1b[%i%p1%ds");
       unibi_set_if_empty(ut, unibi_set_right_margin_parm, "\x1b[%i;%p2%ds");
+    } else {
+      // Fix things advertised via TERM=xterm, for non-xterm.
+      if (unibi_get_str(ut, unibi_set_lr_margin)) {
+        ILOG("Disabling smglr with TERM=xterm for non-xterm.");
+        unibi_set_str(ut, unibi_set_lr_margin, NULL);
+      }
     }
 
 #ifdef WIN32
@@ -1830,6 +1846,11 @@ static void augment_terminfo(TUIData *data, const char *term,
       "\x1b[r");
   }
 
+  // terminfo describes strikethrough modes as rmxx/smxx with respect
+  // to the ECMA-48 strikeout/crossed-out attributes.
+  data->unibi_ext.enter_strikethrough_mode = (int)unibi_find_ext_str(
+      ut, "smxx");
+
   // Dickey ncurses terminfo does not include the setrgbf and setrgbb
   // capabilities, proposed by Rüdiger Sonderfeld on 2013-10-15.  Adding
   // them here when terminfo lacks them is an augmentation, not a fixup.
@@ -1963,10 +1984,12 @@ static void flush_buf(UI *ui)
     assert(data->is_invisible);
     // not busy and the cursor is invisible. Write a "cursor normal" command
     // after writing the buffer.
-    bufp->base = data->norm;
-    bufp->len = UV_BUF_LEN(data->normlen);
-    bufp++;
-    data->is_invisible = data->busy;
+    if (!data->want_invisible) {
+      bufp->base = data->norm;
+      bufp->len = UV_BUF_LEN(data->normlen);
+      bufp++;
+    }
+    data->is_invisible = false;
   }
 
   uv_write(&req, STRUCT_CAST(uv_stream_t, &data->output_handle),

@@ -10,7 +10,7 @@ local ok = helpers.ok
 local meths = helpers.meths
 local spawn, merge_args = helpers.spawn, helpers.merge_args
 local set_session = helpers.set_session
-local meth_pcall = helpers.meth_pcall
+local pcall_err = helpers.pcall_err
 
 describe('server -> client', function()
   local cid
@@ -180,7 +180,7 @@ describe('server -> client', function()
   end)
 
   describe('recursive (child) nvim client', function()
-    if helpers.isCI('travis') and helpers.os_name() == 'osx' then
+    if helpers.isCI('travis') and helpers.is_os('mac') then
       -- XXX: Hangs Travis macOS since e9061117a5b8f195c3f26a5cb94e18ddd7752d86.
       pending("[Hangs on Travis macOS. #5002]", function() end)
       return
@@ -220,8 +220,8 @@ describe('server -> client', function()
     end)
 
     it('returns an error if the request failed', function()
-      eq({false, "Vim:Error invoking 'does-not-exist' on channel 3:\nInvalid method: does-not-exist" },
-         meth_pcall(eval, "rpcrequest(vim, 'does-not-exist')"))
+      eq("Vim:Error invoking 'does-not-exist' on channel 3:\nInvalid method: does-not-exist",
+         pcall_err(eval, "rpcrequest(vim, 'does-not-exist')"))
     end)
   end)
 
@@ -241,10 +241,14 @@ describe('server -> client', function()
         \ 'rpc': v:true
         \ }
       ]])
-      meths.set_var("args", {helpers.test_lua_prg,
-                             'test/functional/api/rpc_fixture.lua'})
+      meths.set_var("args", {
+        helpers.test_lua_prg,
+        'test/functional/api/rpc_fixture.lua',
+        package.path,
+        package.cpath,
+      })
       jobid = eval("jobstart(g:args, g:job_opts)")
-      neq(0, 'jobid')
+      neq(0, jobid)
     end)
 
     after_each(function()
@@ -254,7 +258,11 @@ describe('server -> client', function()
     if helpers.pending_win32(pending) then return end
 
     it('rpc and text stderr can be combined', function()
-      eq("ok",funcs.rpcrequest(jobid, "poll"))
+      local status, rv = pcall(funcs.rpcrequest, jobid, 'poll')
+      if not status then
+        error(string.format('missing nvim Lua module? (%s)', rv))
+      end
+      eq('ok', rv)
       funcs.rpcnotify(jobid, "ping")
       eq({'notification', 'pong', {}}, next_msg())
       eq("done!",funcs.rpcrequest(jobid, "write_stderr", "fluff\n"))
@@ -309,8 +317,7 @@ describe('server -> client', function()
       set_session(server)
       local status, address = pcall(funcs.serverstart, "127.0.0.1:")
       if not status then
-        pending('no ipv4 stack', function() end)
-        return
+        pending('no ipv4 stack')
       end
       eq('127.0.0.1:', string.sub(address,1,10))
       connect_test(server, 'tcp', address)
@@ -321,8 +328,7 @@ describe('server -> client', function()
       set_session(server)
       local status, address = pcall(funcs.serverstart, '::1:')
       if not status then
-        pending('no ipv6 stack', function() end)
-        return
+        pending('no ipv6 stack')
       end
       eq('::1:', string.sub(address,1,4))
       connect_test(server, 'tcp', address)
@@ -339,11 +345,6 @@ describe('server -> client', function()
 
   describe('connecting to its own pipe address', function()
     it('does not deadlock', function()
-      if not helpers.isCI('travis') and helpers.os_name() == 'osx' then
-        -- It does, in fact, deadlock on QuickBuild. #6851
-        pending("deadlocks on QuickBuild", function() end)
-        return
-      end
       local address = funcs.serverlist()[1]
       local first = string.sub(address,1,1)
       ok(first == '/' or first == '\\')

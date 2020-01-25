@@ -3,6 +3,13 @@ function(get_compile_flags _compile_flags)
   set(compile_flags "<CMAKE_C_COMPILER> <CFLAGS> <BUILD_TYPE_CFLAGS> <COMPILE_OPTIONS><COMPILE_DEFINITIONS> <INCLUDES>")
 
   # Get C compiler.
+  if(CMAKE_C_COMPILER_ARG1)
+    string(REPLACE
+      "<CMAKE_C_COMPILER>"
+      "<CMAKE_C_COMPILER> ${CMAKE_C_COMPILER_ARG1}"
+      compile_flags
+      "${compile_flags}")
+  endif()
   string(REPLACE
     "<CMAKE_C_COMPILER>"
     "${CMAKE_C_COMPILER}"
@@ -10,9 +17,7 @@ function(get_compile_flags _compile_flags)
     "${compile_flags}")
 
   # Get flags set by add_definitions().
-  get_directory_property(compile_definitions
-    DIRECTORY "src/nvim"
-    COMPILE_DEFINITIONS)
+  get_property(compile_definitions DIRECTORY PROPERTY COMPILE_DEFINITIONS)
   get_target_property(compile_definitions_target nvim COMPILE_DEFINITIONS)
   if(compile_definitions_target)
     list(APPEND compile_definitions ${compile_definitions_target})
@@ -30,9 +35,7 @@ function(get_compile_flags _compile_flags)
     "${compile_flags}")
 
   # Get flags set by add_compile_options().
-  get_directory_property(compile_options
-    DIRECTORY "src/nvim"
-    COMPILE_OPTIONS)
+  get_property(compile_options DIRECTORY PROPERTY COMPILE_OPTIONS)
   get_target_property(compile_options_target nvim COMPILE_OPTIONS)
   if(compile_options_target)
     list(APPEND compile_options ${compile_options_target})
@@ -62,9 +65,7 @@ function(get_compile_flags _compile_flags)
     "${compile_flags}")
 
   # Get include directories.
-  get_directory_property(include_directories_list
-    DIRECTORY "src/nvim"
-    INCLUDE_DIRECTORIES)
+  get_property(include_directories_list DIRECTORY PROPERTY INCLUDE_DIRECTORIES)
   list(REMOVE_DUPLICATES include_directories_list)
   foreach(include_directory ${include_directories_list})
     set(include_directories "${include_directories} -I${include_directory}")

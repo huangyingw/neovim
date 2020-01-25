@@ -67,8 +67,8 @@ command -nargs=* -complete=file -bang Termdebug call s:StartDebug(<bang>0, <f-ar
 command -nargs=+ -complete=file -bang TermdebugCommand call s:StartDebugCommand(<bang>0, <f-args>)
 
 " Name of the gdb command, defaults to "gdb".
-if !exists('termdebugger')
-  let termdebugger = 'gdb'
+if !exists('g:termdebugger')
+  let g:termdebugger = 'gdb'
 endif
 
 let s:pc_id = 12
@@ -106,9 +106,14 @@ endfunc
 
 func s:StartDebug_internal(dict)
   if exists('s:gdbwin')
-    echoerr 'Terminal debugger already running'
+    echoerr 'Terminal debugger already running, cannot run two'
     return
   endif
+  if !executable(g:termdebugger)
+    echoerr 'Cannot execute debugger program "' .. g:termdebugger .. '"'
+    return
+  endif
+
   let s:ptywin = 0
   let s:pid = 0
 
@@ -238,6 +243,10 @@ func s:StartDebug_term(dict)
         if response =~ 'New UI allocated'
           " Success!
           break
+        endif
+        if response =~ 'Reading symbols from' && response !~ 'new-ui'
+          " Reading symbols might take a while
+	  let try_count -= 1
         endif
       endif
     endfor
@@ -433,7 +442,7 @@ func s:InstallCommands()
   command Gdb call win_gotoid(s:gdbwin)
   command Program call win_gotoid(s:ptywin)
   command Source call s:GotoSourcewinOrCreateIt()
-  command Winbar call s:InstallWinbar()
+  " command Winbar call s:InstallWinbar()
 
   " TODO: can the K mapping be restored?
   nnoremap K :Evaluate<CR>
@@ -441,7 +450,7 @@ func s:InstallCommands()
   let &cpo = save_cpo
 endfunc
 
-let s:winbar_winids = []
+" let s:winbar_winids = []
 
 " Delete installed debugger commands in the current window.
 func s:DeleteCommands()
@@ -458,7 +467,7 @@ func s:DeleteCommands()
   delcommand Gdb
   delcommand Program
   delcommand Source
-  delcommand Winbar
+  " delcommand Winbar
 
   nunmap K
 
@@ -574,6 +583,7 @@ func s:HandleEvaluate(msg)
     endif
     let s:evalFromBalloonExprResult = split(s:evalFromBalloonExprResult, '\\n')
     call s:OpenHoverPreview(s:evalFromBalloonExprResult, v:null)
+    let s:evalFromBalloonExprResult = ''
   else
     echomsg '"' . s:evalexpr . '": ' . value
   endif
@@ -685,10 +695,9 @@ function! s:OpenHoverPreview(lines, filetype) abort
             \   'col': col,
             \   'width': width,
             \   'height': height,
+            \   'style': 'minimal',
             \ })
-      call nvim_win_set_option(float_win_id, 'relativenumber', v:false)
-      call nvim_win_set_option(float_win_id, 'signcolumn', 'no')
-      call nvim_win_set_option(float_win_id, 'signcolumn', 'no')
+
       if a:filetype isnot v:null
         call nvim_win_set_option(float_win_id, 'filetype', a:filetype)
       endif
@@ -724,7 +733,7 @@ func s:GotoSourcewinOrCreateIt()
   if !win_gotoid(s:sourcewin)
     new
     let s:sourcewin = win_getid(winnr())
-    call s:InstallWinbar()
+    " call s:InstallWinbar()
   endif
 endfunc
 
@@ -755,7 +764,7 @@ func s:HandleCursor(msg)
           " TODO: find existing window
           exe 'split ' . fnameescape(fname)
           let s:sourcewin = win_getid(winnr())
-          call s:InstallWinbar()
+          " call s:InstallWinbar()
         else
           exe 'edit ' . fnameescape(fname)
         endif
@@ -896,3 +905,5 @@ func s:BufUnloaded()
   endfor
 endfunc
 
+let &cpo = s:keepcpo
+unlet s:keepcpo

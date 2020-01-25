@@ -65,17 +65,10 @@ static void comp_botline(win_T *wp)
     done = 0;
   }
 
-  for (; lnum <= wp->w_buffer->b_ml.ml_line_count; ++lnum) {
-    int n;
+  for (; lnum <= wp->w_buffer->b_ml.ml_line_count; lnum++) {
     linenr_T last = lnum;
-    bool folded = hasFoldingWin(wp, lnum, NULL, &last, true, NULL);
-    if (folded) {
-      n = 1;
-    } else if (lnum == wp->w_topline) {
-      n = plines_win_nofill(wp, lnum, true) + wp->w_topfill;
-    } else {
-      n = plines_win(wp, lnum, true);
-    }
+    bool folded;
+    int n = plines_win_full(wp, lnum, &last, &folded, true);
     if (lnum <= wp->w_cursor.lnum && last >= wp->w_cursor.lnum) {
       wp->w_cline_row = done;
       wp->w_cline_height = n;
@@ -95,6 +88,8 @@ static void comp_botline(win_T *wp)
   wp->w_valid |= VALID_BOTLINE|VALID_BOTLINE_AP;
 
   set_empty_rows(wp, done);
+
+  win_check_anchored_floats(wp);
 }
 
 void reset_cursorline(void)
@@ -310,6 +305,7 @@ void update_topline(void)
     }
   }
   curwin->w_valid |= VALID_TOPLINE;
+  win_check_anchored_floats(curwin);
 
   /*
    * Need to redraw when topline changed.
@@ -568,18 +564,14 @@ static void curs_rows(win_T *wp)
         break;
       wp->w_cline_row += wp->w_lines[i].wl_size;
     } else {
-      long fold_count = foldedCount(wp, lnum, NULL);
-      if (fold_count) {
-        lnum += fold_count;
-        if (lnum > wp->w_cursor.lnum)
-          break;
-        ++wp->w_cline_row;
-      } else if (lnum == wp->w_topline) {
-        wp->w_cline_row += plines_win_nofill(wp, lnum++, true)
-                           + wp->w_topfill;
-      } else {
-        wp->w_cline_row += plines_win(wp, lnum++, true);
+      linenr_T last = lnum;
+      bool folded;
+      int n = plines_win_full(wp, lnum, &last, &folded, false);
+      lnum = last + 1;
+      if (folded && lnum > wp->w_cursor.lnum) {
+        break;
       }
+      wp->w_cline_row += n;
     }
   }
 
@@ -590,18 +582,13 @@ static void curs_rows(win_T *wp)
         || (i < wp->w_lines_valid
             && (!wp->w_lines[i].wl_valid
                 || wp->w_lines[i].wl_lnum != wp->w_cursor.lnum))) {
-      if (wp->w_cursor.lnum == wp->w_topline)
-        wp->w_cline_height = plines_win_nofill(wp, wp->w_cursor.lnum,
-            true) + wp->w_topfill;
-      else
-        wp->w_cline_height = plines_win(wp, wp->w_cursor.lnum, true);
-      wp->w_cline_folded = hasFoldingWin(wp, wp->w_cursor.lnum,
-          NULL, NULL, true, NULL);
+      wp->w_cline_height = plines_win_full(wp, wp->w_cursor.lnum, NULL,
+                                           &wp->w_cline_folded, true);
     } else if (i > wp->w_lines_valid) {
       /* a line that is too long to fit on the last screen line */
       wp->w_cline_height = 0;
-      wp->w_cline_folded = hasFoldingWin(wp, wp->w_cursor.lnum,
-          NULL, NULL, true, NULL);
+      wp->w_cline_folded = hasFoldingWin(wp, wp->w_cursor.lnum, NULL,
+                                         NULL, true, NULL);
     } else {
       wp->w_cline_height = wp->w_lines[i].wl_size;
       wp->w_cline_folded = wp->w_lines[i].wl_folded;
@@ -643,12 +630,9 @@ static void validate_cheight(void)
 {
   check_cursor_moved(curwin);
   if (!(curwin->w_valid & VALID_CHEIGHT)) {
-    if (curwin->w_cursor.lnum == curwin->w_topline)
-      curwin->w_cline_height = plines_nofill(curwin->w_cursor.lnum)
-                               + curwin->w_topfill;
-    else
-      curwin->w_cline_height = plines(curwin->w_cursor.lnum);
-    curwin->w_cline_folded = hasFolding(curwin->w_cursor.lnum, NULL, NULL);
+    curwin->w_cline_height = plines_win_full(curwin, curwin->w_cursor.lnum,
+                                             NULL, &curwin->w_cline_folded,
+                                             true);
     curwin->w_valid |= VALID_CHEIGHT;
   }
 }
@@ -827,7 +811,8 @@ void curs_columns(
         new_leftcol = 0;
       if (new_leftcol != (int)curwin->w_leftcol) {
         curwin->w_leftcol = new_leftcol;
-        /* screen has to be redrawn with new curwin->w_leftcol */
+        win_check_anchored_floats(curwin);
+        // screen has to be redrawn with new curwin->w_leftcol
         redraw_later(NOT_VALID);
       }
     }
@@ -941,6 +926,74 @@ void curs_columns(
   }
 
   curwin->w_valid |= VALID_WCOL|VALID_WROW|VALID_VIRTCOL;
+}
+
+/// Compute the screen position of text character at "pos" in window "wp"
+/// The resulting values are one-based, zero when character is not visible.
+///
+/// @param[out] rowp screen row
+/// @param[out] scolp start screen column
+/// @param[out] ccolp cursor screen column
+/// @param[out] ecolp end screen column
+void textpos2screenpos(win_T *wp, pos_T *pos, int *rowp, int *scolp,
+                       int *ccolp, int *ecolp, bool local)
+{
+  colnr_T scol = 0, ccol = 0, ecol = 0;
+  int row = 0;
+  int rowoff = 0;
+  colnr_T coloff = 0;
+  bool visible_row = false;
+
+  if (pos->lnum >= wp->w_topline && pos->lnum < wp->w_botline) {
+    row = plines_m_win(wp, wp->w_topline, pos->lnum - 1) + 1;
+    visible_row = true;
+  } else if (pos->lnum < wp->w_topline) {
+    row = 0;
+  } else {
+    row = wp->w_height_inner;
+  }
+
+  bool existing_row = (pos->lnum > 0
+                       && pos->lnum <= wp->w_buffer->b_ml.ml_line_count);
+
+  if ((local && existing_row) || visible_row) {
+    colnr_T off;
+    colnr_T col;
+    int     width;
+
+    getvcol(wp, pos, &scol, &ccol, &ecol);
+
+    // similar to what is done in validate_cursor_col()
+    col = scol;
+    off = win_col_off(wp);
+    col += off;
+    width = wp->w_width - off + win_col_off2(wp);
+
+    // long line wrapping, adjust row
+    if (wp->w_p_wrap && col >= (colnr_T)wp->w_width && width > 0) {
+      // use same formula as what is used in curs_columns()
+      rowoff = visible_row ? ((col - wp->w_width) / width + 1) : 0;
+      col -= rowoff * width;
+    }
+
+    col -= wp->w_leftcol;
+
+    if (col >= 0 && col < width) {
+      coloff = col - scol + (local ? 0 : wp->w_wincol) + 1;
+    } else {
+      scol = ccol = ecol = 0;
+      // character is left or right of the window
+      if (local) {
+        coloff = col < 0 ? -1 : wp->w_width_inner + 1;
+      } else {
+        row = 0;
+      }
+    }
+  }
+  *rowp = (local ? 0 : wp->w_winrow) + row + rowoff;
+  *scolp = scol + coloff;
+  *ccolp = ccol + coloff;
+  *ecolp = ecol + coloff;
 }
 
 /*
@@ -1099,6 +1152,7 @@ check_topfill (
       }
     }
   }
+  win_check_anchored_floats(curwin);
 }
 
 /*

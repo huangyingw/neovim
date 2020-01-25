@@ -7,6 +7,7 @@
 #include "nvim/highlight.h"
 #include "nvim/highlight_defs.h"
 #include "nvim/map.h"
+#include "nvim/message.h"
 #include "nvim/popupmnu.h"
 #include "nvim/screen.h"
 #include "nvim/syntax.h"
@@ -161,6 +162,8 @@ int hl_get_ui_attr(int idx, int final_id, bool optional)
     if (pum_drawn()) {
       must_redraw_pum = true;
     }
+  } else if (idx == HLF_MSG) {
+    msg_grid.blending = attrs.hl_blend > -1;
   }
 
   if (optional && !available) {
@@ -305,23 +308,39 @@ int hl_combine_attr(int char_attr, int prim_attr)
   // start with low-priority attribute, and override colors if present below.
   HlAttrs new_en = char_aep;
 
-  new_en.cterm_ae_attr |= spell_aep.cterm_ae_attr;
-  new_en.rgb_ae_attr |= spell_aep.rgb_ae_attr;
+  if (spell_aep.cterm_ae_attr & HL_NOCOMBINE) {
+    new_en.cterm_ae_attr = spell_aep.cterm_ae_attr;
+  } else {
+    new_en.cterm_ae_attr |= spell_aep.cterm_ae_attr;
+  }
+  if (spell_aep.rgb_ae_attr & HL_NOCOMBINE) {
+    new_en.rgb_ae_attr = spell_aep.rgb_ae_attr;
+  } else {
+    new_en.rgb_ae_attr |= spell_aep.rgb_ae_attr;
+  }
 
   if (spell_aep.cterm_fg_color > 0) {
     new_en.cterm_fg_color = spell_aep.cterm_fg_color;
+    new_en.rgb_ae_attr &= ((~HL_FG_INDEXED)
+                           | (spell_aep.rgb_ae_attr & HL_FG_INDEXED));
   }
 
   if (spell_aep.cterm_bg_color > 0) {
     new_en.cterm_bg_color = spell_aep.cterm_bg_color;
+    new_en.rgb_ae_attr &= ((~HL_BG_INDEXED)
+                           | (spell_aep.rgb_ae_attr & HL_BG_INDEXED));
   }
 
   if (spell_aep.rgb_fg_color >= 0) {
     new_en.rgb_fg_color = spell_aep.rgb_fg_color;
+    new_en.rgb_ae_attr &= ((~HL_FG_INDEXED)
+                           | (spell_aep.rgb_ae_attr & HL_FG_INDEXED));
   }
 
   if (spell_aep.rgb_bg_color >= 0) {
     new_en.rgb_bg_color = spell_aep.rgb_bg_color;
+    new_en.rgb_ae_attr &= ((~HL_BG_INDEXED)
+                           | (spell_aep.rgb_ae_attr & HL_BG_INDEXED));
   }
 
   if (spell_aep.rgb_sp_color >= 0) {
@@ -411,6 +430,7 @@ int hl_blend_attrs(int back_attr, int front_attr, bool *through)
     cattrs.cterm_bg_color = fattrs.cterm_bg_color;
     cattrs.cterm_fg_color = cterm_blend(ratio, battrs.cterm_fg_color,
                                         fattrs.cterm_bg_color);
+    cattrs.rgb_ae_attr &= ~(HL_FG_INDEXED | HL_BG_INDEXED);
   } else {
     cattrs = fattrs;
     if (ratio >= 50) {
@@ -424,6 +444,8 @@ int hl_blend_attrs(int back_attr, int front_attr, bool *through)
     } else {
       cattrs.rgb_sp_color = -1;
     }
+
+    cattrs.rgb_ae_attr &= ~HL_BG_INDEXED;
   }
   cattrs.rgb_bg_color = rgb_blend(ratio, battrs.rgb_bg_color,
                                   fattrs.rgb_bg_color);
@@ -595,7 +617,19 @@ Dictionary hlattrs2dict(HlAttrs ae, bool use_rgb)
     PUT(hl, "reverse", BOOLEAN_OBJ(true));
   }
 
+  if (mask & HL_STRIKETHROUGH) {
+    PUT(hl, "strikethrough", BOOLEAN_OBJ(true));
+  }
+
   if (use_rgb) {
+    if (mask & HL_FG_INDEXED) {
+      PUT(hl, "fg_indexed", BOOLEAN_OBJ(true));
+    }
+
+    if (mask & HL_BG_INDEXED) {
+      PUT(hl, "bg_indexed", BOOLEAN_OBJ(true));
+    }
+
     if (ae.rgb_fg_color != -1) {
       PUT(hl, "foreground", INTEGER_OBJ(ae.rgb_fg_color));
     }
@@ -608,11 +642,11 @@ Dictionary hlattrs2dict(HlAttrs ae, bool use_rgb)
       PUT(hl, "special", INTEGER_OBJ(ae.rgb_sp_color));
     }
   } else {
-    if (cterm_normal_fg_color != ae.cterm_fg_color) {
+    if (cterm_normal_fg_color != ae.cterm_fg_color && ae.cterm_fg_color != 0) {
       PUT(hl, "foreground", INTEGER_OBJ(ae.cterm_fg_color - 1));
     }
 
-    if (cterm_normal_bg_color != ae.cterm_bg_color) {
+    if (cterm_normal_bg_color != ae.cterm_bg_color && ae.cterm_bg_color != 0) {
       PUT(hl, "background", INTEGER_OBJ(ae.cterm_bg_color - 1));
     }
   }

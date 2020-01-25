@@ -156,6 +156,13 @@ static LuaTableProps nlua_traverse_table(lua_State *const lstate)
             && other_keys_num == 0
             && ret.string_keys_num == 0)) {
       ret.type = kObjectTypeArray;
+      if (tsize == 0 && lua_getmetatable(lstate, -1)) {
+        nlua_pushref(lstate, nlua_empty_dict_ref);
+        if (lua_rawequal(lstate, -2, -1)) {
+          ret.type = kObjectTypeDictionary;
+        }
+        lua_pop(lstate, 2);
+      }
     } else if (ret.string_keys_num == tsize) {
       ret.type = kObjectTypeDictionary;
     } else {
@@ -377,6 +384,19 @@ bool nlua_pop_typval(lua_State *lstate, typval_T *ret_tv)
 nlua_pop_typval_table_processing_end:
         break;
       }
+      case LUA_TUSERDATA: {
+        nlua_pushref(lstate, nlua_nil_ref);
+        bool is_nil = lua_rawequal(lstate, -2, -1);
+        lua_pop(lstate, 1);
+        if (is_nil) {
+          cur.tv->v_type = VAR_SPECIAL;
+          cur.tv->vval.v_special = kSpecialVarNull;
+        } else {
+          EMSG(_("E5101: Cannot convert given lua type"));
+          ret = false;
+        }
+        break;
+      }
       default: {
         EMSG(_("E5101: Cannot convert given lua type"));
         ret = false;
@@ -401,10 +421,18 @@ nlua_pop_typval_table_processing_end:
   return ret;
 }
 
+static bool typval_conv_special = false;
+
 #define TYPVAL_ENCODE_ALLOW_SPECIALS true
 
 #define TYPVAL_ENCODE_CONV_NIL(tv) \
-    lua_pushnil(lstate)
+    do { \
+      if (typval_conv_special) { \
+        lua_pushnil(lstate); \
+      } else { \
+        nlua_pushref(lstate, nlua_nil_ref); \
+      } \
+    } while (0)
 
 #define TYPVAL_ENCODE_CONV_BOOL(tv, num) \
     lua_pushboolean(lstate, (bool)(num))
@@ -439,7 +467,15 @@ nlua_pop_typval_table_processing_end:
     lua_createtable(lstate, 0, 0)
 
 #define TYPVAL_ENCODE_CONV_EMPTY_DICT(tv, dict) \
-    nlua_create_typed_table(lstate, 0, 0, kObjectTypeDictionary)
+    do { \
+      if (typval_conv_special) { \
+        nlua_create_typed_table(lstate, 0, 0, kObjectTypeDictionary); \
+      } else { \
+        lua_createtable(lstate, 0, 0); \
+        nlua_pushref(lstate, nlua_empty_dict_ref); \
+        lua_setmetatable(lstate, -2); \
+      } \
+    } while (0)
 
 #define TYPVAL_ENCODE_CONV_LIST_START(tv, len) \
     do { \
@@ -548,9 +584,11 @@ nlua_pop_typval_table_processing_end:
 /// @param[in]  tv  typval_T to convert.
 ///
 /// @return true in case of success, false otherwise.
-bool nlua_push_typval(lua_State *lstate, typval_T *const tv)
+bool nlua_push_typval(lua_State *lstate, typval_T *const tv, bool special)
 {
+  typval_conv_special = special;
   const int initial_size = lua_gettop(lstate);
+
   if (!lua_checkstack(lstate, initial_size + 2)) {
     emsgf(_("E1502: Lua failed to grow stack to %i"), initial_size + 4);
     return false;
@@ -666,6 +704,10 @@ void nlua_push_Dictionary(lua_State *lstate, const Dictionary dict,
     nlua_create_typed_table(lstate, 0, 0, kObjectTypeDictionary);
   } else {
     lua_createtable(lstate, 0, (int)dict.size);
+    if (dict.size == 0 && !special) {
+      nlua_pushref(lstate, nlua_empty_dict_ref);
+      lua_setmetatable(lstate, -2);
+    }
   }
   for (size_t i = 0; i < dict.size; i++) {
     nlua_push_String(lstate, dict.items[i].key, special);
@@ -708,7 +750,11 @@ void nlua_push_Object(lua_State *lstate, const Object obj, bool special)
 {
   switch (obj.type) {
     case kObjectTypeNil: {
-      lua_pushnil(lstate);
+      if (special) {
+        lua_pushnil(lstate);
+      } else {
+        nlua_pushref(lstate, nlua_nil_ref);
+      }
       break;
     }
     case kObjectTypeLuaRef: {
@@ -1142,6 +1188,19 @@ Object nlua_pop_Object(lua_State *const lstate, bool ref, Error *const err)
         break;
       }
 
+      case LUA_TUSERDATA: {
+        nlua_pushref(lstate, nlua_nil_ref);
+        bool is_nil = lua_rawequal(lstate, -2, -1);
+        lua_pop(lstate, 1);
+        if (is_nil) {
+          *cur.obj = NIL;
+        } else {
+          api_set_error(err, kErrorTypeValidation,
+                        "Cannot convert userdata");
+        }
+        break;
+      }
+
       default: {
 type_error:
         api_set_error(err, kErrorTypeValidation,
@@ -1179,7 +1238,7 @@ GENERATE_INDEX_FUNCTION(Tabpage)
 
 #undef GENERATE_INDEX_FUNCTION
 
-/// Record some auxilary values in vim module
+/// Record some auxiliary values in vim module
 ///
 /// Assumes that module table is on top of the stack.
 ///

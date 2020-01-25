@@ -8,7 +8,6 @@
 #include <assert.h>
 #include <string.h>
 #include <inttypes.h>
-#include <stdint.h>
 
 #include "nvim/vim.h"
 #include "nvim/ascii.h"
@@ -326,7 +325,7 @@ static char_u *parse_list_options(char_u *option_str, option_table_T *table,
         break;
       }
 
-      table[idx].number = getdigits_int(&p);
+      table[idx].number = getdigits_int(&p, false, 0);
     }
 
     table[idx].string = p;
@@ -2306,13 +2305,10 @@ int mch_print_init(prt_settings_T *psettings, char_u *jobname, int forceit)
                  || TOLOWER_ASC(printer_opts[OPT_PRINT_COLLATE].string[0]) ==
                  'y');
   if (prt_collate) {
-    /* TODO: Get number of collated copies wanted. */
-    psettings->n_collated_copies = 1;
+    // TODO(vim): Get number of collated copies wanted.
   } else {
-    /* TODO: Get number of uncollated copies wanted and update the cached
-     * count.
-     */
-    prt_num_copies = 1;
+    // TODO(vim): Get number of uncollated copies wanted and update the cached
+    // count.
   }
 
   psettings->jobname = jobname;

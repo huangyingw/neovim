@@ -27,11 +27,7 @@ describe(':terminal', function()
       echomsg "msg3"
     ]])
     -- Invoke a command that emits frequent terminal activity.
-    if iswin() then
-      feed_command([[terminal for /L \%I in (1,0,2) do echo \%I]])
-    else
-      feed_command([[terminal while true; do echo X; done]])
-    end
+    feed([[:terminal "]]..nvim_dir..[[/shell-test" REP 9999 !terminal_output!<cr>]])
     feed([[<C-\><C-N>]])
     wait()
     -- Wait for some terminal activity.
@@ -249,12 +245,14 @@ describe(':terminal (with fake shell)', function()
   it('works with gf', function()
     command('set shellxquote=')   -- win: avoid extra quotes
     terminal_with_fake_shell([[echo "scripts/shadacat.py"]])
+    retry(nil, 4 * screen.timeout, function()
     screen:expect([[
       ^ready $ echo "scripts/shadacat.py"                |
                                                         |
       [Process exited 0]                                |
       :terminal echo "scripts/shadacat.py"              |
     ]])
+    end)
     feed([[<C-\><C-N>]])
     eq('term://', string.match(eval('bufname("%")'), "^term://"))
     feed([[ggf"lgf]])

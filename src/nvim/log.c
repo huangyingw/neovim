@@ -12,7 +12,6 @@
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #if !defined(WIN32)
 # include <sys/time.h>  // for gettimeofday()
@@ -94,6 +93,7 @@ static bool log_path_init(void)
 void log_init(void)
 {
   uv_mutex_init(&mutex);
+  log_path_init();
 }
 
 void log_lock(void)

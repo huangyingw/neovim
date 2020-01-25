@@ -30,7 +30,6 @@
 #include "nvim/indent_c.h"
 #include "nvim/buffer_updates.h"
 #include "nvim/main.h"
-#include "nvim/mark.h"
 #include "nvim/mbyte.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
@@ -278,7 +277,7 @@ int get_last_leader_offset(char_u *line, char_u **flags)
         // whitespace.  Otherwise we would think we are inside a
         // comment if the middle part appears somewhere in the middle
         // of the line.  E.g. for C the "*" appears often.
-        for (j = 0; ascii_iswhite(line[j]) && j <= i; j++) {
+        for (j = 0; j <= i && ascii_iswhite(line[j]); j++) {
         }
         if (j < i) {
           continue;
@@ -484,25 +483,39 @@ int plines_win_col(win_T *wp, linenr_T lnum, long column)
   return lines;
 }
 
+/// Get the number of screen lines lnum takes up. This takes care of
+/// both folds and topfill, and limits to the current window height.
+///
+/// @param[in]  wp       window line is in
+/// @param[in]  lnum     line number
+/// @param[out] nextp    if not NULL, the line after a fold
+/// @param[out] foldedp  if not NULL, whether lnum is on a fold
+/// @param[in]  cache    whether to use the window's cache for folds
+///
+/// @return the total number of screen lines
+int plines_win_full(win_T *wp, linenr_T lnum, linenr_T *const nextp,
+                    bool *const foldedp, const bool cache)
+{
+  bool folded = hasFoldingWin(wp, lnum, NULL, nextp, cache, NULL);
+  if (foldedp) {
+    *foldedp = folded;
+  }
+  if (folded) {
+    return 1;
+  } else if (lnum == wp->w_topline) {
+    return plines_win_nofill(wp, lnum, true) + wp->w_topfill;
+  }
+  return plines_win(wp, lnum, true);
+}
+
 int plines_m_win(win_T *wp, linenr_T first, linenr_T last)
 {
   int count = 0;
 
   while (first <= last) {
-    // Check if there are any really folded lines, but also included lines
-    // that are maybe folded.
-    linenr_T x = foldedCount(wp, first, NULL);
-    if (x > 0) {
-      ++count;              /* count 1 for "+-- folded" line */
-      first += x;
-    } else {
-      if (first == wp->w_topline) {
-        count += plines_win_nofill(wp, first, true) + wp->w_topfill;
-      } else {
-        count += plines_win(wp, first, true);
-      }
-      first++;
-    }
+    linenr_T next = first;
+    count += plines_win_full(wp, first, &next, NULL, false);
+    first = next + 1;
   }
   return count;
 }
@@ -560,7 +573,7 @@ int ask_yesno(const char *const str, const bool direct)
     // Same highlighting as for wait_return.
     smsg_attr(HL_ATTR(HLF_R), "%s (y/n)?", str);
     if (direct) {
-      r = get_keystroke();
+      r = get_keystroke(NULL);
     } else {
       r = plain_vgetc();
     }
@@ -614,7 +627,7 @@ int is_mouse_key(int c)
  * Disadvantage: typeahead is ignored.
  * Translates the interrupt character for unix to ESC.
  */
-int get_keystroke(void)
+int get_keystroke(MultiQueue *events)
 {
   char_u      *buf = NULL;
   int buflen = 150;
@@ -644,7 +657,7 @@ int get_keystroke(void)
 
     /* First time: blocking wait.  Second time: wait up to 100ms for a
      * terminal code to complete. */
-    n = os_inchar(buf + len, maxlen, len == 0 ? -1L : 100L, 0);
+    n = os_inchar(buf + len, maxlen, len == 0 ? -1L : 100L, 0, events);
     if (n > 0) {
       // Replace zero and CSI by a special key code.
       n = fix_input_buffer(buf + len, n);
@@ -653,18 +666,12 @@ int get_keystroke(void)
     } else if (len > 0)
       ++waited;             /* keep track of the waiting time */
 
-    if (n == KEYLEN_REMOVED) {    /* key code removed */
-      if (must_redraw != 0 && !need_wait_return && (State & CMDLINE) == 0) {
-        /* Redrawing was postponed, do it now. */
-        update_screen(0);
-        setcursor();         /* put cursor back where it belongs */
-      }
+    if (n > 0) {  // found a termcode: adjust length
+      len = n;
+    }
+    if (len == 0) {  // nothing typed yet
       continue;
     }
-    if (n > 0)                  /* found a termcode: adjust length */
-      len = n;
-    if (len == 0)               /* nothing typed yet */
-      continue;
 
     /* Handle modifier and/or special key code. */
     n = buf[0];

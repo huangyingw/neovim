@@ -1,5 +1,5 @@
-" Test for python 2 commands.
-" TODO: move tests from test88.in here.
+" Test for python 3 commands.
+" TODO: move tests from test87.in here.
 
 if !has('python3')
   finish
@@ -26,7 +26,22 @@ func Test_py3do()
   endif
 endfunc
 
+func Test_set_cursor()
+  " Check that setting the cursor position works.
+  py3 import vim
+  new
+  call setline(1, ['first line', 'second line'])
+  normal gg
+  py3do vim.current.window.cursor = (1, 5)
+  call assert_equal([1, 6], [line('.'), col('.')])
+
+  " Check that movement after setting cursor position keeps current column.
+  normal j
+  call assert_equal([2, 6], [line('.'), col('.')])
+endfunc
+
 func Test_vim_function()
+  throw 'skipped: Nvim does not support vim.bindeval()'
   " Check creating vim.Function object
   py3 import vim
 
@@ -51,6 +66,14 @@ func Test_vim_function()
 
   py3 del f
   delfunc s:foo
+endfunc
+
+func Test_skipped_python3_command_does_not_affect_pyxversion()
+  set pyxversion=0
+  if 0
+    python3 import vim
+  endif
+  call assert_equal(0, &pyxversion)  " This assertion would have failed with Vim 8.0.0251. (pyxversion was introduced in 8.0.0251.)
 endfunc
 
 func _SetUpHiddenBuffer()
@@ -141,3 +164,29 @@ func Test_Write_To_Current_Buffer_Fixes_Cursor_Str()
 
   bwipe!
 endfunction
+
+func Test_Catch_Exception_Message()
+  try
+    py3 raise RuntimeError( 'TEST' )
+  catch /.*/
+    call assert_match('^Vim(.*):.*RuntimeError: TEST$', v:exception )
+  endtry
+endfunc
+
+func Test_unicode()
+  " this crashed Vim once
+  throw "Skipped: nvim does not support changing 'encoding'"
+
+  set encoding=utf32
+  py3 print('hello')
+
+  if !has('win32')
+    set encoding=debug
+    py3 print('hello')
+
+    set encoding=euc-tw
+    py3 print('hello')
+  endif
+
+  set encoding=utf8
+endfunc

@@ -4,12 +4,12 @@
 			    NVIM REFERENCE MANUAL
 
 
-Nvim UI protocol							  *ui*
+Nvim UI protocol					*UI* *ui*
 
                                       Type |gO| to see the table of contents.
 
 ==============================================================================
-UI Events							    *ui-events*
+UI Events						*ui-events*
 
 UIs can be implemented as external client processes communicating with Nvim
 over the RPC API. The default UI model is a terminal-like grid with a single,
@@ -201,8 +201,8 @@ the editor.
 	sent from Nvim, like for |ui-cmdline|.
 
 ["mode_change", mode, mode_idx]
-	The mode changed.  The first parameter `mode` is a string representing
-	the current mode. `mode_idx` is an index into the array received in
+	Editor mode changed.  The `mode` parameter is a string representing
+	the current mode. `mode_idx` is an index into the array emitted in
 	the `mode_info_set` event. UIs should change the cursor style
 	according to the properties specified in the corresponding item. The
 	set of modes reported will change in new versions of Nvim, for
@@ -211,11 +211,11 @@ the editor.
 
 ["mouse_on"]
 ["mouse_off"]
-	Tells the client whether mouse support, as determined by |'mouse'|
-	option, is considered to be active in the current mode. This is mostly
-	useful for a terminal frontend, or other situations where Nvim mouse
-	would conflict with other usages of the mouse. It is safe for a client
-	to ignore this and always send mouse events.
+	|'mouse'| was enabled/disabled in the current editor mode. Useful for
+	a terminal UI, or other situations where Nvim mouse would conflict
+	with other usages of the mouse. UIs may ignore this and always send
+	mouse input, because 'mouse' decides the behavior of |nvim_input()|
+	implicitly.
 
 ["busy_start"]
 ["busy_stop"]
@@ -290,10 +290,12 @@ numerical highlight ids to the actual attributes.
 			switched.
 	`italic`:	italic text.
 	`bold`:		bold text.
+	`strikethrough`:  struckthrough text.
 	`underline`:	underlined text. The line has `special` color.
 	`undercurl`:	undercurled text. The curl has `special` color.
 	`blend`:	Blend level (0-100). Could be used by UIs to support
-			blending floating windows to the background.
+			blending floating windows to the background or to
+			signal a transparent cursor.
 
 	For absent color keys the default color should be used. Don't store
 	the default value in the table, rather a sentinel value, so that
@@ -447,6 +449,7 @@ is not active. New UIs should implement |ui-linegrid| instead.
 			switched.
 	`italic`:	italic text.
 	`bold`:		bold text.
+	`strikethrough`:  struckthrough text.
 	`underline`:	underlined text. The line has `special` color.
 	`undercurl`:	undercurled text. The curl has `special` color.
 
@@ -543,6 +546,8 @@ The multigrid extension gives UIs more control over how windows are displayed:
   occupies on the global layout. So the UI could use a different font size
   per-window. Or reserve space around the border of the window for its own
   elements, such as scrollbars from the UI toolkit.
+- A dedicated grid is used for messages, which may scroll over the window
+  area. (Alternatively |ext_messages| can be used).
 
 By default, the grid size is handled by Nvim and set to the outer grid size
 (i.e. the size of the window frame in Nvim) whenever the split is created.
@@ -573,18 +578,19 @@ tabs.
 ["win_hide", grid]
 	Stop displaying the window. The window can be shown again later.
 
-["win_scroll_over_start"]
-	Hint that following `grid_scroll` on the default grid should
-	scroll over windows. This is a temporary workaround to allow
-	UIs to use the builtin message drawing. Later on, messages will be
-	drawn on a dedicated grid. Using |ui-messages| also avoids this issue.
-
-["win_scroll_over_reset"]
-	Hint that scrolled over windows should be redrawn again, and not be
-	overdrawn by default grid scrolling anymore.
-
 ["win_close", grid]
 	Close the window.
+
+["msg_set_pos", grid, row, scrolled, sep_char]
+	Display messages on `grid`.  The grid will be displayed at `row` on the
+	default grid (grid=1), covering the full column width. `scrolled`
+	indicates whether the message area has been scrolled to cover other
+	grids. It can be useful to draw a separator then ('display' msgsep
+	flag). The Builtin TUI draws a full line filled with `sep_char` and
+	|hl-MsgSeparator| highlight.
+
+	When |ext_messages| is active, no message grid is used, and this event
+	will not be sent.
 
 ==============================================================================
 Popupmenu Events						 *ui-popupmenu*

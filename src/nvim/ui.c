@@ -9,6 +9,7 @@
 
 #include "nvim/vim.h"
 #include "nvim/log.h"
+#include "nvim/aucmd.h"
 #include "nvim/ui.h"
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
@@ -174,7 +175,7 @@ void ui_refresh(void)
   }
 
   if (updating_screen) {
-    ui_schedule_refresh();
+    deferred_refresh_event(NULL);
     return;
   }
 
@@ -221,6 +222,19 @@ void ui_refresh(void)
   ui_cursor_shape();
 }
 
+int ui_pum_get_height(void)
+{
+  int pum_height = 0;
+  for (size_t i = 1; i < ui_count; i++) {
+    int ui_pum_height = uis[i]->pum_height;
+    if (ui_pum_height) {
+      pum_height =
+        pum_height != 0 ? MIN(pum_height, ui_pum_height) : ui_pum_height;
+    }
+  }
+  return pum_height;
+}
+
 static void ui_refresh_event(void **argv)
 {
   ui_refresh();
@@ -228,7 +242,11 @@ static void ui_refresh_event(void **argv)
 
 void ui_schedule_refresh(void)
 {
-  loop_schedule(&main_loop, event_create(ui_refresh_event, 0));
+  loop_schedule_fast(&main_loop, event_create(deferred_refresh_event, 0));
+}
+static void deferred_refresh_event(void **argv)
+{
+  multiqueue_put(resize_events, ui_refresh_event, 0);
 }
 
 void ui_default_colors_set(void)
@@ -251,7 +269,7 @@ void ui_busy_stop(void)
   }
 }
 
-void ui_attach_impl(UI *ui)
+void ui_attach_impl(UI *ui, uint64_t chanid)
 {
   if (ui_count == MAX_UI_COUNT) {
     abort();
@@ -275,9 +293,14 @@ void ui_attach_impl(UI *ui)
     ui_send_all_hls(ui);
   }
   ui_refresh();
+
+  bool is_compositor = (ui == uis[0]);
+  if (!is_compositor) {
+    do_autocmd_uienter(chanid, true);
+  }
 }
 
-void ui_detach_impl(UI *ui)
+void ui_detach_impl(UI *ui, uint64_t chanid)
 {
   size_t shift_index = MAX_UI_COUNT;
 
@@ -309,6 +332,8 @@ void ui_detach_impl(UI *ui)
   if (!ui->ui_ext[kUIMultigrid] && !ui->ui_ext[kUIFloatDebug]) {
     ui_comp_detach(ui);
   }
+
+  do_autocmd_uienter(chanid, false);
 }
 
 void ui_set_ext_option(UI *ui, UIExtension ext, bool active)
@@ -329,6 +354,7 @@ void ui_set_ext_option(UI *ui, UIExtension ext, bool active)
 void ui_line(ScreenGrid *grid, int row, int startcol, int endcol, int clearcol,
              int clearattr, bool wrap)
 {
+  assert(0 <= row && row < grid->Rows);
   LineFlags flags = wrap ? kLineFlagWrap : 0;
   if (startcol == -1) {
     startcol = 0;
@@ -400,6 +426,7 @@ void ui_flush(void)
   cmdline_ui_flush();
   win_ui_flush_positions();
   msg_ext_ui_flush();
+  msg_scroll_flush();
 
   if (pending_cursor_update) {
     ui_call_grid_cursor_goto(cursor_grid_handle, cursor_row, cursor_col);
@@ -457,9 +484,7 @@ Array ui_array(void)
         PUT(info, ui_ext_names[j], BOOLEAN_OBJ(ui->ui_ext[j]));
       }
     }
-    if (ui->inspect) {
-      ui->inspect(ui, &info);
-    }
+    ui->inspect(ui, &info);
     ADD(all_uis, DICTIONARY_OBJ(info));
   }
   return all_uis;
@@ -480,7 +505,7 @@ void ui_grid_resize(handle_T grid_handle, int width, int height, Error *error)
   }
 
   if (wp->w_floating) {
-    if (width != wp->w_width && height != wp->w_height) {
+    if (width != wp->w_width || height != wp->w_height) {
       wp->w_float_config.width = width;
       wp->w_float_config.height = height;
       win_config_float(wp, wp->w_float_config);

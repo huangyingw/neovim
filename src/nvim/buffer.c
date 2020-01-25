@@ -53,6 +53,7 @@
 #include "nvim/indent_c.h"
 #include "nvim/main.h"
 #include "nvim/mark.h"
+#include "nvim/extmark.h"
 #include "nvim/mbyte.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
@@ -79,12 +80,6 @@
 #include "nvim/os/time.h"
 #include "nvim/os/input.h"
 #include "nvim/buffer_updates.h"
-
-typedef enum {
-  kBLSUnchanged = 0,
-  kBLSChanged = 1,
-  kBLSDeleted = 2,
-} BufhlLineStatus;
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "buffer.c.generated.h"
@@ -144,7 +139,7 @@ read_buffer(
     if (!readonlymode && !BUFEMPTY()) {
       changed();
     } else if (retval != FAIL) {
-      unchanged(curbuf, false);
+      unchanged(curbuf, false, true);
     }
 
     apply_autocmds_retval(EVENT_STDINREADPOST, NULL, NULL, false,
@@ -299,7 +294,7 @@ int open_buffer(
       || (aborting() && vim_strchr(p_cpo, CPO_INTMOD) != NULL)) {
     changed();
   } else if (retval != FAIL && !read_stdin && !read_fifo) {
-    unchanged(curbuf, false);
+    unchanged(curbuf, false, true);
   }
   save_file_ff(curbuf);                 // keep this fileformat
 
@@ -410,11 +405,11 @@ bool buf_valid(buf_T *buf)
 ///               caller should get a new buffer very soon!
 ///               The 'bufhidden' option can force freeing and deleting.
 /// @param abort_if_last
-///               If TRUE, do not close the buffer if autocommands cause
+///               If true, do not close the buffer if autocommands cause
 ///               there to be only one window with this buffer. e.g. when
 ///               ":quit" is supposed to close the window but autocommands
 ///               close all other windows.
-void close_buffer(win_T *win, buf_T *buf, int action, int abort_if_last)
+void close_buffer(win_T *win, buf_T *buf, int action, bool abort_if_last)
 {
   bool unload_buf = (action != 0);
   bool del_buf = (action == DOBUF_DEL || action == DOBUF_WIPE);
@@ -641,13 +636,11 @@ void close_buffer(win_T *win, buf_T *buf, int action, int abort_if_last)
   }
 }
 
-/*
- * Make buffer not contain a file.
- */
+/// Make buffer not contain a file.
 void buf_clear_file(buf_T *buf)
 {
   buf->b_ml.ml_line_count = 1;
-  unchanged(buf, true);
+  unchanged(buf, true, true);
   buf->b_p_eol = true;
   buf->b_start_eol = true;
   buf->b_p_bomb = false;
@@ -818,7 +811,7 @@ static void free_buffer_stuff(buf_T *buf, int free_flags)
   }
   uc_clear(&buf->b_ucmds);               // clear local user commands
   buf_delete_signs(buf, (char_u *)"*");  // delete any signs
-  bufhl_clear_all(buf);                  // delete any highligts
+  extmark_free_all(buf);                 // delete any extmarks
   map_clear_int(buf, MAP_ALL_MODES, true, false);    // clear local mappings
   map_clear_int(buf, MAP_ALL_MODES, true, true);     // clear local abbrevs
   XFREE_CLEAR(buf->b_start_fenc);
@@ -931,7 +924,7 @@ void handle_swap_exists(bufref_T *old_curbuf)
 
     // User selected Recover at ATTENTION prompt.
     msg_scroll = true;
-    ml_recover();
+    ml_recover(false);
     MSG_PUTS("\n");     // don't overwrite the last message
     cmdline_row = msg_row;
     do_modelines(0);
@@ -1018,8 +1011,9 @@ do_bufdel(
             break;
           }
           arg = p;
-        } else
-          bnr = getdigits_int(&arg);
+        } else {
+          bnr = getdigits_int(&arg, false, 0);
+        }
       }
     }
     if (!got_int && do_current
@@ -1237,7 +1231,7 @@ do_buffer(
               return FAIL;
             }
           } else {
-            EMSG2(_("E89: %s will be killed(add ! to override)"),
+            EMSG2(_("E89: %s will be killed (add ! to override)"),
                   (char *)buf->b_fname);
             return FAIL;
           }
@@ -1584,10 +1578,12 @@ void enter_buffer(buf_T *buf)
 
     open_buffer(false, NULL, 0);
   } else {
-    if (!msg_silent) {
+    if (!msg_silent && !shortmess(SHM_FILEINFO)) {
       need_fileinfo = true;             // display file info after redraw
     }
-    (void)buf_check_timestamp(curbuf, false);     // check if file changed
+    // check if file changed
+    (void)buf_check_timestamp(curbuf, false);
+
     curwin->w_topline = 1;
     curwin->w_topfill = 0;
     apply_autocmds(EVENT_BUFENTER, NULL, NULL, false, curbuf);
@@ -1948,6 +1944,7 @@ void free_buf_options(buf_T *buf, int free_p_ff)
   clear_string_option(&buf->b_p_path);
   clear_string_option(&buf->b_p_tags);
   clear_string_option(&buf->b_p_tc);
+  clear_string_option(&buf->b_p_tfu);
   clear_string_option(&buf->b_p_dict);
   clear_string_option(&buf->b_p_tsr);
   clear_string_option(&buf->b_p_qe);
@@ -2654,8 +2651,7 @@ void buflist_list(exarg_T *eap)
         buf == curbuf ? (int64_t)curwin->w_cursor.lnum
                       : (int64_t)buflist_findlnum(buf));
     msg_outtrans(IObuff);
-    ui_flush();            // output one line at a time
-    os_breakcheck();
+    line_breakcheck();
   }
 }
 
@@ -2691,7 +2687,7 @@ setfname(
     buf_T *buf,
     char_u *ffname,
     char_u *sfname,
-    int message                    // give message when buffer already exists
+    bool message                  // give message when buffer already exists
 )
 {
   buf_T       *obuf = NULL;
@@ -3072,18 +3068,15 @@ void col_print(char_u *buf, size_t buflen, int col, int vcol)
   }
 }
 
-/*
- * put file name in title bar of window and in icon title
- */
-
 static char_u *lasttitle = NULL;
 static char_u *lasticon = NULL;
 
+
+// Put the title name in the title bar and icon of the window.
 void maketitle(void)
 {
-  char_u      *t_str = NULL;
-  char_u      *i_name;
-  char_u      *i_str = NULL;
+  char_u *title_str = NULL;
+  char_u *icon_str = NULL;
   int maxlen = 0;
   int len;
   int mustset;
@@ -3097,7 +3090,7 @@ void maketitle(void)
 
   need_maketitle = false;
   if (!p_title && !p_icon && lasttitle == NULL && lasticon == NULL) {
-    return;
+    return;  // nothing to do
   }
 
   if (p_title) {
@@ -3118,14 +3111,14 @@ void maketitle(void)
         build_stl_str_hl(curwin, (char_u *)buf, sizeof(buf),
                          p_titlestring, use_sandbox,
                          0, maxlen, NULL, NULL);
-        t_str = (char_u *)buf;
+        title_str = (char_u *)buf;
         if (called_emsg) {
           set_string_option_direct((char_u *)"titlestring", -1, (char_u *)"",
                                    OPT_FREE, SID_ERROR);
         }
         called_emsg |= save_called_emsg;
       } else {
-        t_str = p_titlestring;
+        title_str = p_titlestring;
       }
     } else {
       // Format: "fname + (path) (1 of 2) - VIM".
@@ -3209,16 +3202,16 @@ void maketitle(void)
           trunc_string((char_u *)buf, (char_u *)buf, maxlen, sizeof(buf));
         }
       }
-      t_str = (char_u *)buf;
+      title_str = (char_u *)buf;
 #undef SPACE_FOR_FNAME
 #undef SPACE_FOR_DIR
 #undef SPACE_FOR_ARGNR
     }
   }
-  mustset = ti_change(t_str, &lasttitle);
+  mustset = value_change(title_str, &lasttitle);
 
   if (p_icon) {
-    i_str = (char_u *)buf;
+    icon_str = (char_u *)buf;
     if (*p_iconstring != NUL) {
       if (stl_syntax & STL_IN_ICON) {
         int use_sandbox = false;
@@ -3226,37 +3219,40 @@ void maketitle(void)
 
         use_sandbox = was_set_insecurely((char_u *)"iconstring", 0);
         called_emsg = false;
-        build_stl_str_hl(curwin, i_str, sizeof(buf),
-            p_iconstring, use_sandbox,
-            0, 0, NULL, NULL);
-        if (called_emsg)
+        build_stl_str_hl(curwin, icon_str, sizeof(buf),
+                         p_iconstring, use_sandbox,
+                         0, 0, NULL, NULL);
+        if (called_emsg) {
           set_string_option_direct((char_u *)"iconstring", -1,
-              (char_u *)"", OPT_FREE, SID_ERROR);
+                                   (char_u *)"", OPT_FREE, SID_ERROR);
+        }
         called_emsg |= save_called_emsg;
-      } else
-        i_str = p_iconstring;
-    } else {
-      if (buf_spname(curbuf) != NULL) {
-        i_name = buf_spname(curbuf);
-      } else {                        // use file name only in icon
-        i_name = path_tail(curbuf->b_ffname);
+      } else {
+        icon_str = p_iconstring;
       }
-      *i_str = NUL;
+    } else {
+      char_u *buf_p;
+      if (buf_spname(curbuf) != NULL) {
+        buf_p = buf_spname(curbuf);
+      } else {                        // use file name only in icon
+        buf_p = path_tail(curbuf->b_ffname);
+      }
+      *icon_str = NUL;
       // Truncate name at 100 bytes.
-      len = (int)STRLEN(i_name);
+      len = (int)STRLEN(buf_p);
       if (len > 100) {
         len -= 100;
         if (has_mbyte) {
-          len += (*mb_tail_off)(i_name, i_name + len) + 1;
+          len += (*mb_tail_off)(buf_p, buf_p + len) + 1;
         }
-        i_name += len;
+        buf_p += len;
       }
-      STRCPY(i_str, i_name);
-      trans_characters(i_str, IOSIZE);
+      STRCPY(icon_str, buf_p);
+      trans_characters(icon_str, IOSIZE);
     }
   }
 
-  mustset |= ti_change(i_str, &lasticon);
+  mustset |= value_change(icon_str, &lasticon);
 
   if (mustset) {
     resettitle();
@@ -3270,8 +3266,8 @@ void maketitle(void)
 /// @param          str   desired title string
 /// @param[in,out]  last  current title string
 //
-/// @return true when "*last" changed.
-static bool ti_change(char_u *str, char_u **last)
+/// @return true if resettitle() is to be called.
+static bool value_change(char_u *str, char_u **last)
   FUNC_ATTR_WARN_UNUSED_RESULT
 {
   if ((str == NULL) != (*last == NULL)
@@ -3279,10 +3275,11 @@ static bool ti_change(char_u *str, char_u **last)
     xfree(*last);
     if (str == NULL) {
       *last = NULL;
+      resettitle();
     } else {
       *last = vim_strsave(str);
+      return true;
     }
-    return true;
   }
   return false;
 }
@@ -3629,10 +3626,7 @@ int build_stl_str_hl(
 
     // The first digit group is the item's min width
     if (ascii_isdigit(*fmt_p)) {
-      minwid = getdigits_int(&fmt_p);
-      if (minwid < 0) {         // overflow
-        minwid = 0;
-      }
+      minwid = getdigits_int(&fmt_p, false, 0);
     }
 
     // User highlight groups override the min width field
@@ -3715,10 +3709,7 @@ int build_stl_str_hl(
     if (*fmt_p == '.') {
       fmt_p++;
       if (ascii_isdigit(*fmt_p)) {
-        maxwid = getdigits_int(&fmt_p);
-        if (maxwid <= 0) {              // overflow
-          maxwid = 50;
-        }
+        maxwid = getdigits_int(&fmt_p, false, 50);
       }
     }
 
@@ -3804,14 +3795,20 @@ int build_stl_str_hl(
 
       buf_T *const save_curbuf = curbuf;
       win_T *const save_curwin = curwin;
+      const int save_VIsual_active = VIsual_active;
       curwin = wp;
       curbuf = wp->w_buffer;
+      // Visual mode is only valid in the current window.
+      if (curwin != save_curwin) {
+        VIsual_active = false;
+      }
 
       // Note: The result stored in `t` is unused.
       str = eval_to_string_safe(out_p, &t, use_sandbox);
 
       curwin = save_curwin;
       curbuf = save_curbuf;
+      VIsual_active = save_VIsual_active;
 
       // Remove the variable we just stored
       do_unlet(S_LEN("g:actual_curbuf"), true);
@@ -4637,7 +4634,8 @@ do_arg_all(
           if (i < alist->al_ga.ga_len
               && (AARGLIST(alist)[i].ae_fnum == buf->b_fnum
                   || path_full_compare(alist_name(&AARGLIST(alist)[i]),
-                                       buf->b_ffname, true) & kEqualFiles)) {
+                                       buf->b_ffname,
+                                       true, true) & kEqualFiles)) {
             int weight = 1;
 
             if (old_curtab == curtab) {
@@ -5067,7 +5065,6 @@ chk_modeline(
   int retval = OK;
   char_u      *save_sourcing_name;
   linenr_T save_sourcing_lnum;
-  scid_T save_SID;
 
   prev = -1;
   for (s = ml_get(lnum); *s != NUL; s++) {
@@ -5082,7 +5079,7 @@ chk_modeline(
         } else {
           e = s + 3;
         }
-        if (getdigits_safe(&e, &vers) != OK) {
+        if (!try_getdigits(&e, &vers)) {
           continue;
         }
 
@@ -5155,15 +5152,17 @@ chk_modeline(
 
     if (*s != NUL) {                  // skip over an empty "::"
       const int secure_save = secure;
-      save_SID = current_SID;
-      current_SID = SID_MODELINE;
+      const sctx_T save_current_sctx = current_sctx;
+      current_sctx.sc_sid = SID_MODELINE;
+      current_sctx.sc_seq = 0;
+      current_sctx.sc_lnum = 0;
       // Make sure no risky things are executed as a side effect.
       secure = 1;
 
       retval = do_set(s, OPT_MODELINE | OPT_LOCAL | flags);
 
       secure = secure_save;
-      current_SID = save_SID;
+      current_sctx = save_current_sctx;
       if (retval == FAIL) {                   // stop if error found
         break;
       }
@@ -5184,6 +5183,13 @@ bool bt_help(const buf_T *const buf)
   FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
   return buf != NULL && buf->b_help;
+}
+
+// Return true if "buf" is a normal buffer, 'buftype' is empty.
+bool bt_normal(const buf_T *const buf)
+  FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
+{
+  return buf != NULL && buf->b_p_bt[0] == NUL;
 }
 
 // Return true if "buf" is the quickfix buffer.
@@ -5329,349 +5335,6 @@ int buf_signcols(buf_T *buf)
 
     return buf->b_signcols;
 }
-
-// bufhl: plugin highlights associated with a buffer
-
-/// Get reference to line in kbtree_t
-///
-/// @param b the three
-/// @param line the linenumber to lookup
-/// @param put if true, put a new line when not found
-///            if false, return NULL when not found
-BufhlLine *bufhl_tree_ref(BufhlInfo *b, linenr_T line, bool put)
-{
-  BufhlLine t = BUFHLLINE_INIT(line);
-
-  // kp_put() only works if key is absent, try get first
-  BufhlLine **pp = kb_get(bufhl, b, &t);
-  if (pp) {
-    return *pp;
-  } else if (!put) {
-    return NULL;
-  }
-
-  BufhlLine *p = xmalloc(sizeof(*p));
-  *p = (BufhlLine)BUFHLLINE_INIT(line);
-  kb_put(bufhl, b, p);
-  return p;
-}
-
-/// Adds a highlight to buffer.
-///
-/// Unlike matchaddpos() highlights follow changes to line numbering (as lines
-/// are inserted/removed above the highlighted line), like signs and marks do.
-///
-/// When called with "src_id" set to 0, a unique source id is generated and
-/// returned. Succesive calls can pass it in as "src_id" to add new highlights
-/// to the same source group. All highlights in the same group can be cleared
-/// at once. If the highlight never will be manually deleted pass in -1 for
-/// "src_id"
-///
-/// if "hl_id" or "lnum" is invalid no highlight is added, but a new src_id
-/// is still returned.
-///
-/// @param buf The buffer to add highlights to
-/// @param src_id src_id to use or 0 to use a new src_id group,
-///               or -1 for ungrouped highlight.
-/// @param hl_id Id of the highlight group to use
-/// @param lnum The line to highlight
-/// @param col_start First column to highlight
-/// @param col_end The last column to highlight,
-///                or -1 to highlight to end of line
-/// @return The src_id that was used
-int bufhl_add_hl(buf_T *buf,
-                 int src_id,
-                 int hl_id,
-                 linenr_T lnum,
-                 colnr_T col_start,
-                 colnr_T col_end)
-{
-  if (src_id == 0) {
-    src_id = (int)nvim_create_namespace((String)STRING_INIT);
-  }
-  if (hl_id <= 0) {
-      // no highlight group or invalid line, just return src_id
-      return src_id;
-  }
-
-  BufhlLine *lineinfo = bufhl_tree_ref(&buf->b_bufhl_info, lnum, true);
-
-  BufhlItem *hlentry = kv_pushp(lineinfo->items);
-  hlentry->src_id = src_id;
-  hlentry->hl_id = hl_id;
-  hlentry->start = col_start;
-  hlentry->stop = col_end;
-
-  if (0 < lnum && lnum <= buf->b_ml.ml_line_count) {
-    redraw_buf_line_later(buf, lnum);
-  }
-  return src_id;
-}
-
-/// Add highlighting to a buffer, bounded by two cursor positions,
-/// with an offset.
-///
-/// @param buf Buffer to add highlights to
-/// @param src_id src_id to use or 0 to use a new src_id group,
-///               or -1 for ungrouped highlight.
-/// @param hl_id Highlight group id
-/// @param pos_start Cursor position to start the hightlighting at
-/// @param pos_end Cursor position to end the highlighting at
-/// @param offset Move the whole highlighting this many columns to the right
-void bufhl_add_hl_pos_offset(buf_T *buf,
-                             int src_id,
-                             int hl_id,
-                             lpos_T pos_start,
-                             lpos_T pos_end,
-                             colnr_T offset)
-{
-  colnr_T hl_start = 0;
-  colnr_T hl_end = 0;
-
-  for (linenr_T lnum = pos_start.lnum; lnum <= pos_end.lnum; lnum ++) {
-    if (pos_start.lnum < lnum && lnum < pos_end.lnum) {
-      hl_start = offset;
-      hl_end = MAXCOL;
-    } else if (lnum == pos_start.lnum && lnum < pos_end.lnum) {
-      hl_start = pos_start.col + offset + 1;
-      hl_end = MAXCOL;
-    } else if (pos_start.lnum < lnum && lnum == pos_end.lnum) {
-      hl_start = offset;
-      hl_end = pos_end.col + offset;
-    } else if (pos_start.lnum == lnum && pos_end.lnum == lnum) {
-      hl_start = pos_start.col + offset + 1;
-      hl_end = pos_end.col + offset;
-    }
-    (void)bufhl_add_hl(buf, src_id, hl_id, lnum, hl_start, hl_end);
-  }
-}
-
-int bufhl_add_virt_text(buf_T *buf,
-                        int src_id,
-                        linenr_T lnum,
-                        VirtText virt_text)
-{
-  if (src_id == 0) {
-    src_id = (int)nvim_create_namespace((String)STRING_INIT);
-  }
-
-  BufhlLine *lineinfo = bufhl_tree_ref(&buf->b_bufhl_info, lnum, true);
-
-  bufhl_clear_virttext(&lineinfo->virt_text);
-  if (kv_size(virt_text) > 0) {
-    lineinfo->virt_text_src = src_id;
-    lineinfo->virt_text = virt_text;
-  } else {
-    lineinfo->virt_text_src = 0;
-    // currently not needed, but allow a future caller with
-    // 0 size and non-zero capacity
-    kv_destroy(virt_text);
-  }
-
-  if (0 < lnum && lnum <= buf->b_ml.ml_line_count) {
-    redraw_buf_line_later(buf, lnum);
-  }
-  return src_id;
-}
-
-static void bufhl_clear_virttext(VirtText *text)
-{
-  for (size_t i = 0; i < kv_size(*text); i++) {
-    xfree(kv_A(*text, i).text);
-  }
-  kv_destroy(*text);
-  *text = (VirtText)KV_INITIAL_VALUE;
-}
-
-/// Clear bufhl highlights from a given source group and range of lines.
-///
-/// @param buf The buffer to remove highlights from
-/// @param src_id highlight source group to clear, or -1 to clear all groups.
-/// @param line_start first line to clear
-/// @param line_end last line to clear or MAXLNUM to clear to end of file.
-void bufhl_clear_line_range(buf_T *buf,
-                            int src_id,
-                            linenr_T line_start,
-                            linenr_T line_end)
-{
-  kbitr_t(bufhl) itr;
-  BufhlLine *l, t = BUFHLLINE_INIT(line_start);
-  if (!kb_itr_get(bufhl, &buf->b_bufhl_info, &t, &itr)) {
-    kb_itr_next(bufhl, &buf->b_bufhl_info, &itr);
-  }
-  for (; kb_itr_valid(&itr); kb_itr_next(bufhl, &buf->b_bufhl_info, &itr)) {
-    l = kb_itr_key(&itr);
-    linenr_T line = l->line;
-    if (line > line_end) {
-      break;
-    }
-    if (line_start <= line) {
-      BufhlLineStatus status = bufhl_clear_line(l, src_id, line);
-      if (status != kBLSUnchanged) {
-        redraw_buf_line_later(buf, line);
-      }
-      if (status == kBLSDeleted) {
-        kb_del_itr(bufhl, &buf->b_bufhl_info, &itr);
-        xfree(l);
-      }
-    }
-  }
-}
-
-/// Clear bufhl highlights from a given source group and given line
-///
-/// @param bufhl_info The highlight info for the buffer
-/// @param src_id Highlight source group to clear, or -1 to clear all groups.
-/// @param lnum Linenr where the highlight should be cleared
-static BufhlLineStatus bufhl_clear_line(BufhlLine *lineinfo, int src_id,
-                                        linenr_T lnum)
-{
-  BufhlLineStatus changed = kBLSUnchanged;
-  size_t oldsize = kv_size(lineinfo->items);
-  if (src_id < 0) {
-    kv_size(lineinfo->items) = 0;
-  } else {
-    size_t newidx = 0;
-    for (size_t i = 0; i < kv_size(lineinfo->items); i++) {
-      if (kv_A(lineinfo->items, i).src_id != src_id) {
-        if (i != newidx) {
-          kv_A(lineinfo->items, newidx) = kv_A(lineinfo->items, i);
-        }
-        newidx++;
-      }
-    }
-    kv_size(lineinfo->items) = newidx;
-  }
-  if (kv_size(lineinfo->items) != oldsize) {
-    changed = kBLSChanged;
-  }
-
-  if (kv_size(lineinfo->virt_text) != 0
-      && (src_id < 0 || src_id == lineinfo->virt_text_src)) {
-    bufhl_clear_virttext(&lineinfo->virt_text);
-    lineinfo->virt_text_src = 0;
-    changed = kBLSChanged;
-  }
-
-  if (kv_size(lineinfo->items) == 0 && kv_size(lineinfo->virt_text) == 0) {
-    kv_destroy(lineinfo->items);
-    return kBLSDeleted;
-  }
-  return changed;
-}
-
-
-/// Remove all highlights and free the highlight data
-void bufhl_clear_all(buf_T *buf)
-{
-  bufhl_clear_line_range(buf, -1, 1, MAXLNUM);
-  kb_destroy(bufhl, (&buf->b_bufhl_info));
-  kb_init(&buf->b_bufhl_info);
-  kv_destroy(buf->b_bufhl_move_space);
-  kv_init(buf->b_bufhl_move_space);
-}
-
-/// Adjust a placed highlight for inserted/deleted lines.
-void bufhl_mark_adjust(buf_T* buf,
-                       linenr_T line1,
-                       linenr_T line2,
-                       long amount,
-                       long amount_after,
-                       bool end_temp)
-{
-  kbitr_t(bufhl) itr;
-  BufhlLine *l, t = BUFHLLINE_INIT(line1);
-  if (end_temp && amount < 0) {
-    // Move all items from b_bufhl_move_space to the btree.
-    for (size_t i = 0; i < kv_size(buf->b_bufhl_move_space); i++) {
-      l = kv_A(buf->b_bufhl_move_space, i);
-      l->line += amount;
-      kb_put(bufhl, &buf->b_bufhl_info, l);
-    }
-    kv_size(buf->b_bufhl_move_space) = 0;
-    return;
-  }
-
-  if (!kb_itr_get(bufhl, &buf->b_bufhl_info, &t, &itr)) {
-    kb_itr_next(bufhl, &buf->b_bufhl_info, &itr);
-  }
-  for (; kb_itr_valid(&itr); kb_itr_next(bufhl, &buf->b_bufhl_info, &itr)) {
-    l = kb_itr_key(&itr);
-    if (l->line >= line1 && l->line <= line2) {
-      if (end_temp && amount > 0) {
-        kb_del_itr(bufhl, &buf->b_bufhl_info, &itr);
-        kv_push(buf->b_bufhl_move_space, l);
-      }
-      if (amount == MAXLNUM) {
-        if (bufhl_clear_line(l, -1, l->line) == kBLSDeleted) {
-          kb_del_itr(bufhl, &buf->b_bufhl_info, &itr);
-          xfree(l);
-        } else {
-          assert(false);
-        }
-      } else {
-        l->line += amount;
-      }
-    } else if (l->line > line2) {
-      if (amount_after == 0) {
-        break;
-      }
-      l->line += amount_after;
-    }
-  }
-}
-
-
-/// Get highlights to display at a specific line
-///
-/// @param buf The buffer handle
-/// @param lnum The line number
-/// @param[out] info The highligts for the line
-/// @return true if there was highlights to display
-bool bufhl_start_line(buf_T *buf, linenr_T lnum, BufhlLineInfo *info)
-{
-  BufhlLine *lineinfo = bufhl_tree_ref(&buf->b_bufhl_info, lnum, false);
-  if (!lineinfo) {
-    return false;
-  }
-  info->valid_to = -1;
-  info->line = lineinfo;
-  return true;
-}
-
-/// get highlighting at column col
-///
-/// It is is assumed this will be called with
-/// non-decreasing column nrs, so that it is
-/// possible to only recalculate highlights
-/// at endpoints.
-///
-/// @param info The info returned by bufhl_start_line
-/// @param col The column to get the attr for
-/// @return The highilight attr to display at the column
-int bufhl_get_attr(BufhlLineInfo *info, colnr_T col)
-{
-  if (col <= info->valid_to) {
-    return info->current;
-  }
-  int attr = 0;
-  info->valid_to = MAXCOL;
-  for (size_t i = 0; i < kv_size(info->line->items); i++) {
-    BufhlItem entry = kv_A(info->line->items, i);
-    if (entry.start <= col && col <= entry.stop) {
-      int entry_attr = syn_id2attr(entry.hl_id);
-      attr = hl_combine_attr(attr, entry_attr);
-      if (entry.stop < info->valid_to) {
-        info->valid_to = entry.stop;
-      }
-    } else if (col < entry.start && entry.start-1 < info->valid_to) {
-      info->valid_to = entry.start-1;
-    }
-  }
-  info->current = attr;
-  return attr;
-}
-
 
 /*
  * Set 'buflisted' for curbuf to "on" and trigger autocommands if it changed.

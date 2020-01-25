@@ -265,6 +265,8 @@
                                 // follow; never used in prefix tree
 #define BY_SPECIAL  BY_FLAGS2   // highest special byte value
 
+#define ZERO_FLAG   65009       // used when flag is zero: "0"
+
 // Flags used in .spl file for soundsalike flags.
 #define SAL_F0LLOWUP            1
 #define SAL_COLLAPSE            2
@@ -623,7 +625,7 @@ spell_load_file (
   switch (scms_ret) {
     case SP_FORMERROR:
     case SP_TRUNCERROR: {
-      emsgf(_("E757: This does not look like a spell file"));
+      emsgf("%s", _("E757: This does not look like a spell file"));
       goto endFAIL;
     }
     case SP_OTHERERROR: {
@@ -1236,17 +1238,14 @@ static int read_sal_section(FILE *fd, slang_T *slang)
     p = xmalloc(1);
     p[0] = NUL;
     smp->sm_lead = p;
+    smp->sm_lead_w = mb_str2wide(smp->sm_lead);
     smp->sm_leadlen = 0;
     smp->sm_oneof = NULL;
+    smp->sm_oneof_w = NULL;
     smp->sm_rules = p;
     smp->sm_to = NULL;
-    if (has_mbyte) {
-      smp->sm_lead_w = mb_str2wide(smp->sm_lead);
-      smp->sm_leadlen = 0;
-      smp->sm_oneof_w = NULL;
-      smp->sm_to_w = NULL;
-    }
-    ++gap->ga_len;
+    smp->sm_to_w = NULL;
+    gap->ga_len++;
   }
 
   // Fill the first-index table.
@@ -1711,7 +1710,6 @@ read_tree_node (
       if (c == BY_NOFLAGS && !prefixtree) {
         // No flags, all regions.
         idxs[idx] = 0;
-        c = 0;
       } else if (c != BY_INDEX) {
         if (prefixtree) {
           // Read the optional pflags byte, the prefix ID and the
@@ -1787,7 +1785,7 @@ spell_reload_one (
   bool didit = false;
 
   for (slang = first_lang; slang != NULL; slang = slang->sl_next) {
-    if (path_full_compare(fname, slang->sl_fname, false) == kEqualFiles) {
+    if (path_full_compare(fname, slang->sl_fname, false, true) == kEqualFiles) {
       slang_clear(slang);
       if (spell_load_file(fname, NULL, slang, false) == NULL)
         // reloading failed, clear the language
@@ -1833,24 +1831,30 @@ int spell_check_msm(void)
   if (!ascii_isdigit(*p))
     return FAIL;
   // block count = (value * 1024) / SBLOCKSIZE (but avoid overflow)
-  start = (getdigits_long(&p) * 10) / (SBLOCKSIZE / 102);
-  if (*p != ',')
+  start = (getdigits_long(&p, true, 0) * 10) / (SBLOCKSIZE / 102);
+  if (*p != ',') {
     return FAIL;
-  ++p;
-  if (!ascii_isdigit(*p))
+  }
+  p++;
+  if (!ascii_isdigit(*p)) {
     return FAIL;
-  incr = (getdigits_long(&p) * 102) / (SBLOCKSIZE / 10);
-  if (*p != ',')
+  }
+  incr = (getdigits_long(&p, true, 0) * 102) / (SBLOCKSIZE / 10);
+  if (*p != ',') {
     return FAIL;
-  ++p;
-  if (!ascii_isdigit(*p))
+  }
+  p++;
+  if (!ascii_isdigit(*p)) {
     return FAIL;
-  added = getdigits_long(&p) * 1024;
-  if (*p != NUL)
+  }
+  added = getdigits_long(&p, true, 0) * 1024;
+  if (*p != NUL) {
     return FAIL;
+  }
 
-  if (start == 0 || incr == 0 || added == 0 || incr > start)
+  if (start == 0 || incr == 0 || added == 0 || incr > start) {
     return FAIL;
+  }
 
   compress_start = start;
   compress_inc = incr;
@@ -2650,8 +2654,9 @@ static afffile_T *spell_read_aff(spellinfo_T *spin, char_u *fname)
   }
 
   if (compsylmax != 0) {
-    if (syllable == NULL)
-      smsg(_("COMPOUNDSYLMAX used without SYLLABLE"));
+    if (syllable == NULL) {
+      smsg("%s", _("COMPOUNDSYLMAX used without SYLLABLE"));
+    }
     aff_check_number(spin->si_compsylmax, compsylmax, "COMPOUNDSYLMAX");
     spin->si_compsylmax = compsylmax;
   }
@@ -2777,6 +2782,7 @@ static unsigned affitem2flag(int flagtype, char_u *item, char_u *fname, int lnum
 }
 
 // Get one affix name from "*pp" and advance the pointer.
+// Returns ZERO_FLAG for "0".
 // Returns zero for an error, still advances the pointer then.
 static unsigned get_affitem(int flagtype, char_u **pp)
 {
@@ -2787,7 +2793,10 @@ static unsigned get_affitem(int flagtype, char_u **pp)
       ++*pp;            // always advance, avoid getting stuck
       return 0;
     }
-    res = getdigits_int(pp);
+    res = getdigits_int(pp, true, 0);
+    if (res == 0) {
+      res = ZERO_FLAG;
+    }
   } else {
     res = mb_ptr2char_adv((const char_u **)pp);
     if (flagtype == AFT_LONG || (flagtype == AFT_CAPLONG
@@ -2906,13 +2915,18 @@ static bool flag_in_afflist(int flagtype, char_u *afflist, unsigned flag)
 
   case AFT_NUM:
     for (p = afflist; *p != NUL; ) {
-      int digits = getdigits_int(&p);
+      int digits = getdigits_int(&p, true, 0);
       assert(digits >= 0);
       n = (unsigned int)digits;
-      if (n == flag)
+      if (n == 0) {
+        n = ZERO_FLAG;
+      }
+      if (n == flag) {
         return true;
-      if (*p != NUL)            // skip over comma
-        ++p;
+      }
+      if (*p != NUL) {          // skip over comma
+        p++;
+      }
     }
     break;
   }
@@ -4713,7 +4727,8 @@ static void spell_make_sugfile(spellinfo_T *spin, char_u *wfname)
   // of the code for the soundfolding stuff.
   // It might have been done already by spell_reload_one().
   for (slang = first_lang; slang != NULL; slang = slang->sl_next) {
-    if (path_full_compare(wfname, slang->sl_fname, false) == kEqualFiles) {
+    if (path_full_compare(wfname, slang->sl_fname, false, true)
+        == kEqualFiles) {
       break;
     }
   }

@@ -151,7 +151,6 @@ static char_u typebuf_init[TYPELEN_INIT];       /* initial typebuf.tb_buf */
 static char_u noremapbuf_init[TYPELEN_INIT];    /* initial typebuf.tb_noremap */
 
 static size_t last_recorded_len = 0;      // number of last recorded chars
-static const uint8_t ui_toggle[] = { K_SPECIAL, KS_EXTRA, KE_PASTE, 0 };
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "getchar.c.generated.h"
@@ -524,15 +523,12 @@ void AppendToRedobuff(const char *s)
   }
 }
 
-/*
- * Append to Redo buffer literally, escaping special characters with CTRL-V.
- * K_SPECIAL and CSI are escaped as well.
- */
-void 
-AppendToRedobuffLit (
-    char_u *str,
-    int len                    /* length of "str" or -1 for up to the NUL */
-)
+/// Append to Redo buffer literally, escaping special characters with CTRL-V.
+/// K_SPECIAL and CSI are escaped as well.
+///
+/// @param str  String to append
+/// @param len  Length of `str` or -1 for up to the NUL.
+void AppendToRedobuffLit(const char_u *str, int len)
 {
   if (block_redo) {
     return;
@@ -1169,12 +1165,12 @@ void free_typebuf(void)
   if (typebuf.tb_buf == typebuf_init) {
     internal_error("Free typebuf 1");
   } else {
-    xfree(typebuf.tb_buf);
+    XFREE_CLEAR(typebuf.tb_buf);
   }
   if (typebuf.tb_noremap == noremapbuf_init) {
     internal_error("Free typebuf 2");
   } else {
-    xfree(typebuf.tb_noremap);
+    XFREE_CLEAR(typebuf.tb_noremap);
   }
 }
 
@@ -1522,7 +1518,7 @@ int vgetc(void)
    * collection in the first next vgetc().  It's disabled after that to
    * avoid internally used Lists and Dicts to be freed.
    */
-  may_garbage_collect = FALSE;
+  may_garbage_collect = false;
 
   return c;
 }
@@ -1536,8 +1532,9 @@ int safe_vgetc(void)
   int c;
 
   c = vgetc();
-  if (c == NUL)
-    c = get_keystroke();
+  if (c == NUL) {
+    c = get_keystroke(NULL);
+  }
   return c;
 }
 
@@ -1565,7 +1562,7 @@ int vpeekc(void)
 {
   if (old_char != -1)
     return old_char;
-  return vgetorpeek(FALSE);
+  return vgetorpeek(false);
 }
 
 /*
@@ -1618,20 +1615,20 @@ vungetc ( /* unget one character (can only be done once!) */
 ///    Also stores the result of mappings.
 ///    Also used for the ":normal" command.
 /// 3. from the user
-///    This may do a blocking wait if "advance" is TRUE.
+///    This may do a blocking wait if "advance" is true.
 ///
-/// if "advance" is TRUE (vgetc()):
+/// if "advance" is true (vgetc()):
 ///    Really get the character.
 ///    KeyTyped is set to TRUE in the case the user typed the key.
 ///    KeyStuffed is TRUE if the character comes from the stuff buffer.
-/// if "advance" is FALSE (vpeekc()):
+/// if "advance" is false (vpeekc()):
 ///    Just look whether there is a character available.
 ///    Return NUL if not.
 ///
 /// When `no_mapping` (global) is zero, checks for mappings in the current mode.
 /// Only returns one byte (of a multi-byte character).
 /// K_SPECIAL and CSI may be escaped, need to get two more bytes then.
-static int vgetorpeek(int advance)
+static int vgetorpeek(bool advance)
 {
   int c, c1;
   int keylen;
@@ -1724,7 +1721,7 @@ static int vgetorpeek(int advance)
           // flush all input
           c = inchar(typebuf.tb_buf, typebuf.tb_buflen - 1, 0L);
           // If inchar() returns TRUE (script file was active) or we
-          // are inside a mapping, get out of insert mode.
+          // are inside a mapping, get out of Insert mode.
           // Otherwise we behave like having gotten a CTRL-C.
           // As a result typing CTRL-C in insert mode will
           // really insert a CTRL-C.
@@ -1836,13 +1833,13 @@ static int vgetorpeek(int advance)
                 char_u *p1 = mp->m_keys;
                 char_u *p2 = (char_u *)mb_unescape((const char **)&p1);
 
-                if (has_mbyte && p2 != NULL && MB_BYTE2LEN(c1) > MB_PTR2LEN(p2))
+                if (p2 != NULL && MB_BYTE2LEN(c1) > utfc_ptr2len(p2)) {
                   mlen = 0;
-                /*
-                 * Check an entry whether it matches.
-                 * - Full match: mlen == keylen
-                 * - Partly match: mlen == typebuf.tb_len
-                 */
+                }
+
+                // Check an entry whether it matches.
+                // - Full match: mlen == keylen
+                // - Partly match: mlen == typebuf.tb_len
                 keylen = mp->m_keylen;
                 if (mlen == keylen
                     || (mlen == typebuf.tb_len
@@ -1902,14 +1899,8 @@ static int vgetorpeek(int advance)
             }
           }
 
-          // Check for a key that can toggle the 'paste' option
-          if (mp == NULL && (State & (INSERT|NORMAL))) {
-            bool match = typebuf_match_len(ui_toggle, &mlen);
-            if (!match && mlen != typebuf.tb_len && *p_pt != NUL) {
-              // didn't match ui_toggle_key and didn't try the whole typebuf,
-              // check the 'pastetoggle'
-              match = typebuf_match_len(p_pt, &mlen);
-            }
+          if (*p_pt != NUL && mp == NULL && (State & (INSERT|NORMAL))) {
+            bool match = typebuf_match_len(p_pt, &mlen);
             if (match) {
               // write chars to script file(s)
               if (mlen > typebuf.tb_maplen) {
@@ -1940,8 +1931,7 @@ static int vgetorpeek(int advance)
           }
 
           if ((mp == NULL || max_mlen >= mp_match_len)
-              && keylen != KEYLEN_PART_MAP
-              && !(keylen == KEYLEN_PART_KEY && c1 == ui_toggle[0])) {
+              && keylen != KEYLEN_PART_MAP) {
             // No matching mapping found or found a non-matching mapping that
             // matches at least what the matching mapping matched
             keylen = 0;
@@ -2334,7 +2324,7 @@ static int vgetorpeek(int advance)
       }             /* for (;;) */
     }           /* if (!character from stuffbuf) */
 
-    /* if advance is FALSE don't loop on NULs */
+    // if advance is false don't loop on NULs
   } while (c < 0 || (advance && c == NUL));
 
   /*
@@ -2419,7 +2409,6 @@ int inchar(
     did_outofmem_msg = FALSE;       /* display out of memory message (again) */
     did_swapwrite_msg = FALSE;      /* display swap file write error again */
   }
-  undo_off = FALSE;                 /* restart undo now */
 
   // Get a character from a script file if there is one.
   // If interrupted: Stop reading script files, close them all.
@@ -2458,9 +2447,10 @@ int inchar(
       char_u dum[DUM_LEN + 1];
 
       for (;; ) {
-        len = os_inchar(dum, DUM_LEN, 0L, 0);
-        if (len == 0 || (len == 1 && dum[0] == 3))
+        len = os_inchar(dum, DUM_LEN, 0L, 0, NULL);
+        if (len == 0 || (len == 1 && dum[0] == 3)) {
           break;
+        }
       }
       return retesc;
     }
@@ -2471,7 +2461,7 @@ int inchar(
 
     // Fill up to a third of the buffer, because each character may be
     // tripled below.
-    len = os_inchar(buf, maxlen / 3, (int)wait_time, tb_change_cnt);
+    len = os_inchar(buf, maxlen / 3, (int)wait_time, tb_change_cnt, NULL);
   }
 
   // If the typebuf was changed further down, it is like nothing was added by
@@ -2968,7 +2958,8 @@ int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev,
                 mp->m_silent = args->silent;
                 mp->m_mode = mode;
                 mp->m_expr = args->expr;
-                mp->m_script_ID = current_SID;
+                mp->m_script_ctx = current_sctx;
+                mp->m_script_ctx.sc_lnum += sourcing_lnum;
                 did_it = true;
               }
             }
@@ -3043,7 +3034,8 @@ int buf_do_map(int maptype, MapArguments *args, int mode, bool is_abbrev,
   mp->m_silent = args->silent;
   mp->m_mode = mode;
   mp->m_expr = args->expr;
-  mp->m_script_ID = current_SID;
+  mp->m_script_ctx = current_sctx;
+  mp->m_script_ctx.sc_lnum += sourcing_lnum;
 
   // add the new entry in front of the abbrlist or maphash[] list
   if (is_abbrev) {
@@ -3114,7 +3106,7 @@ int do_map(int maptype, char_u *arg, int mode, bool is_abbrev)
     case 0:
       break;
     case 1:
-      result = 1;  // invalid arguments
+      // invalid arguments
       goto free_and_return;
     default:
       assert(false && "Unknown return code from str_to_mapargs!");
@@ -3386,9 +3378,10 @@ showmap (
     msg_outtrans_special(s, FALSE);
     xfree(s);
   }
-  if (p_verbose > 0)
-    last_set_msg(mp->m_script_ID);
-  ui_flush();                          /* show one line at a time */
+  if (p_verbose > 0) {
+    last_set_msg(mp->m_script_ctx);
+  }
+  ui_flush();                          // show one line at a time
 }
 
 /// Check if a map exists that has given string in the rhs
@@ -4425,7 +4418,7 @@ mapblock_T *get_maphash(int index, buf_T *buf)
 }
 
 /// Get command argument for <Cmd> key
-char_u * getcmdkeycmd(int promptc, void *cookie, int indent)
+char_u * getcmdkeycmd(int promptc, void *cookie, int indent, bool do_concat)
 {
   garray_T line_ga;
   int c1 = -1, c2;

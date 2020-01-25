@@ -1,6 +1,7 @@
 " Test for completion menu
 
 source shared.vim
+source screendump.vim
 
 let g:months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 let g:setting = ''
@@ -669,27 +670,28 @@ func Test_popup_and_window_resize()
   if h < 15
     return
   endif
-  let g:buf = term_start([GetVimProg(), '--clean', '-c', 'set noswapfile'], {'term_rows': h / 3})
-  call term_sendkeys(g:buf, (h / 3 - 1)."o\<esc>")
-  call term_wait(g:buf, 200)
-  call term_sendkeys(g:buf, "Gi\<c-x>")
-  call term_sendkeys(g:buf, "\<c-v>")
-  call term_wait(g:buf, 100)
+  let rows = h / 3
+  let buf = term_start([GetVimProg(), '--clean', '-c', 'set noswapfile'], {'term_rows': rows})
+  call term_sendkeys(buf, (h / 3 - 1) . "o\<esc>")
+  " Wait for the nested Vim to exit insert mode, where it will show the ruler.
+  " Need to trigger a redraw.
+  call WaitFor({-> execute("redraw") == "" && term_getline(buf, rows) =~ '\<' . rows . ',.*Bot'})
+
+  call term_sendkeys(buf, "Gi\<c-x>")
+  call term_sendkeys(buf, "\<c-v>")
+  call term_wait(buf, 100)
   " popup first entry "!" must be at the top
-  call WaitFor('term_getline(g:buf, 1) =~ "^!"')
-  call assert_match('^!\s*$', term_getline(g:buf, 1))
+  call WaitForAssert({-> assert_match('^!\s*$', term_getline(buf, 1))})
   exe 'resize +' . (h - 1)
-  call term_wait(g:buf, 100)
+  call term_wait(buf, 100)
   redraw!
   " popup shifted down, first line is now empty
-  call WaitFor('term_getline(g:buf, 1) == ""')
-  call assert_equal('', term_getline(g:buf, 1))
+  call WaitForAssert({-> assert_equal('', term_getline(buf, 1))})
   sleep 100m
   " popup is below cursor line and shows first match "!"
-  call WaitFor('term_getline(g:buf, term_getcursor(g:buf)[0] + 1) =~ "^!"')
-  call assert_match('^!\s*$', term_getline(g:buf, term_getcursor(g:buf)[0] + 1))
+  call WaitForAssert({-> assert_match('^!\s*$', term_getline(buf, term_getcursor(buf)[0] + 1))})
   " cursor line also shows !
-  call assert_match('^!\s*$', term_getline(g:buf, term_getcursor(g:buf)[0]))
+  call assert_match('^!\s*$', term_getline(buf, term_getcursor(buf)[0]))
   bwipe!
 endfunc
 
@@ -731,6 +733,70 @@ func Test_popup_and_preview_autocommand()
   bw!
 endfunc
 
+func Test_popup_and_previewwindow_dump()
+  if !CanRunVimInTerminal()
+    return
+  endif
+  call writefile([
+    \ 'set previewheight=9',
+    \ 'silent! pedit',
+    \ 'call setline(1, map(repeat(["ab"], 10), "v:val. v:key"))',
+    \ 'exec "norm! G\<C-E>\<C-E>"',
+	\ ], 'Xscript')
+  let buf = RunVimInTerminal('-S Xscript', {})
+
+  " Test that popup and previewwindow do not overlap.
+  call term_sendkeys(buf, "o\<C-X>\<C-N>")
+  sleep 100m
+  call VerifyScreenDump(buf, 'Test_popup_and_previewwindow_01', {})
+
+  call term_sendkeys(buf, "\<Esc>u")
+  call StopVimInTerminal(buf)
+  call delete('Xscript')
+endfunc
+
+func Test_popup_position()
+  if !CanRunVimInTerminal()
+    return
+  endif
+  let lines =<< trim END
+    123456789_123456789_123456789_a
+    123456789_123456789_123456789_b
+                123
+  END
+  call writefile(lines, 'Xtest')
+  let buf = RunVimInTerminal('Xtest', {})
+  call term_sendkeys(buf, ":vsplit\<CR>")
+
+  " default pumwidth in left window: overlap in right window
+  call term_sendkeys(buf, "GA\<C-N>")
+  call VerifyScreenDump(buf, 'Test_popup_position_01', {'rows': 8})
+  call term_sendkeys(buf, "\<Esc>u")
+
+  " default pumwidth: fill until right of window
+  call term_sendkeys(buf, "\<C-W>l")
+  call term_sendkeys(buf, "GA\<C-N>")
+  call VerifyScreenDump(buf, 'Test_popup_position_02', {'rows': 8})
+
+  " larger pumwidth: used as minimum width
+  call term_sendkeys(buf, "\<Esc>u")
+  call term_sendkeys(buf, ":set pumwidth=30\<CR>")
+  call term_sendkeys(buf, "GA\<C-N>")
+  call VerifyScreenDump(buf, 'Test_popup_position_03', {'rows': 8})
+
+  " completed text wider than the window and 'pumwidth' smaller than available
+  " space
+  call term_sendkeys(buf, "\<Esc>u")
+  call term_sendkeys(buf, ":set pumwidth=20\<CR>")
+  call term_sendkeys(buf, "ggI123456789_\<Esc>")
+  call term_sendkeys(buf, "jI123456789_\<Esc>")
+  call term_sendkeys(buf, "GA\<C-N>")
+  call VerifyScreenDump(buf, 'Test_popup_position_04', {'rows': 10})
+  
+  call term_sendkeys(buf, "\<Esc>u")
+  call StopVimInTerminal(buf)
+  call delete('Xtest')
+endfunc
 
 func Test_popup_complete_backwards()
   new
@@ -741,6 +807,46 @@ func Test_popup_complete_backwards()
   call assert_equal(expected, getline(1,'$'))
   bwipe!
 endfunc
+
+func Test_popup_complete_backwards_ctrl_p()
+  new
+  call setline(1, ['Post', 'Port', 'Po'])
+  let expected=['Post', 'Port', 'Port']
+  call cursor(3,2)
+  call feedkeys("A\<C-P>\<C-N>rt\<cr>", 'tx')
+  call assert_equal(expected, getline(1,'$'))
+  bwipe!
+endfunc
+
+fun! Test_complete_o_tab()
+  throw 'skipped: Nvim does not support test_override()'
+  let s:o_char_pressed = 0
+
+  fun! s:act_on_text_changed()
+    if s:o_char_pressed
+      let s:o_char_pressed = 0
+      call feedkeys("\<c-x>\<c-n>", 'i')
+    endif
+  endf
+
+  set completeopt=menu,noselect
+  new
+  imap <expr> <buffer> <tab> pumvisible() ? "\<c-p>" : "X"
+  autocmd! InsertCharPre <buffer> let s:o_char_pressed = (v:char ==# 'o')
+  autocmd! TextChangedI <buffer> call <sid>act_on_text_changed()
+  call setline(1,  ['hoard', 'hoax', 'hoarse', ''])
+  let l:expected = ['hoard', 'hoax', 'hoarse', 'hoax', 'hoax']
+  call cursor(4,1)
+  call test_override("char_avail", 1)
+  call feedkeys("Ahoa\<tab>\<tab>\<c-y>\<esc>", 'tx')
+  call feedkeys("oho\<tab>\<tab>\<c-y>\<esc>", 'tx')
+  call assert_equal(l:expected, getline(1,'$'))
+
+  call test_override("char_avail", 0)
+  bwipe!
+  set completeopt&
+  delfunc s:act_on_text_changed
+endf
 
 func Test_popup_complete_info_01()
   new
@@ -843,6 +949,20 @@ func Test_popup_complete_info_02()
   bwipe!
 endfunc
 
+func Test_popup_complete_info_no_pum()
+  new
+  call assert_false( pumvisible() )
+  let no_pum_info = complete_info()
+  let d = {
+        \   'mode': '',
+        \   'pum_visible': 0,
+        \   'items': [],
+        \   'selected': -1,
+        \  }
+  call assert_equal( d, complete_info() )
+  bwipe!
+endfunc
+
 func Test_CompleteChanged()
   new
   call setline(1, ['foo', 'bar', 'foobar', ''])
@@ -875,6 +995,34 @@ func Test_CompleteChanged()
   set complete& completeopt&
   delfunc! OnPumchange
   bw!
+endfunc
+
+function! GetPumPosition()
+  call assert_true( pumvisible() )
+  let g:pum_pos = pum_getpos()
+  return ''
+endfunction
+
+func Test_pum_getpos()
+  new
+  inoremap <buffer><F5> <C-R>=GetPumPosition()<CR>
+  setlocal completefunc=UserDefinedComplete
+
+   let d = {
+    \   'height':    5,
+    \   'width':     15,
+    \   'row':       1,
+    \   'col':       0,
+    \   'size':      5,
+    \   'scrollbar': v:false,
+    \ }
+  call feedkeys("i\<C-X>\<C-U>\<F5>", 'tx')
+  call assert_equal(d, g:pum_pos)
+
+  call assert_false( pumvisible() )
+  call assert_equal( {}, pum_getpos() )
+  bw!
+  unlet g:pum_pos
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab

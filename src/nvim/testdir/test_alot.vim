@@ -2,6 +2,7 @@
 " This makes testing go faster, since Vim doesn't need to restart.
 
 source test_assign.vim
+source test_backup.vim
 source test_behave.vim
 source test_cd.vim
 source test_changedtick.vim
@@ -11,6 +12,7 @@ source test_ex_equal.vim
 source test_ex_undo.vim
 source test_ex_z.vim
 source test_execute_func.vim
+source test_expand_func.vim
 source test_expr.vim
 source test_feedkeys.vim
 source test_filter_cmd.vim
@@ -26,7 +28,6 @@ source test_jumps.vim
 source test_fileformat.vim
 source test_filetype.vim
 source test_lambda.vim
-source test_mapping.vim
 source test_menu.vim
 source test_messages.vim
 source test_modeline.vim
@@ -44,6 +45,7 @@ source test_syn_attr.vim
 source test_tabline.vim
 source test_tabpage.vim
 source test_tagcase.vim
+source test_tagfunc.vim
 source test_tagjump.vim
 source test_taglist.vim
 source test_true_false.vim

@@ -2,17 +2,19 @@ local helpers = require('test.functional.helpers')(after_each)
 local Screen = require('test.functional.ui.screen')
 local os = require('os')
 local clear, feed = helpers.clear, helpers.feed
+local assert_alive = helpers.assert_alive
 local command, feed_command = helpers.command, helpers.feed_command
 local eval = helpers.eval
 local eq = helpers.eq
+local exec_lua = helpers.exec_lua
 local insert = helpers.insert
 local meths = helpers.meths
 local curbufmeths = helpers.curbufmeths
 local funcs = helpers.funcs
 local run = helpers.run
-local meth_pcall = helpers.meth_pcall
+local pcall_err = helpers.pcall_err
 
-describe('floating windows', function()
+describe('floatwin', function()
   before_each(function()
     clear()
   end)
@@ -39,6 +41,7 @@ describe('floating windows', function()
     [19] = {foreground = Screen.colors.DarkBlue, background = Screen.colors.WebGray},
     [20] = {bold = true, foreground = Screen.colors.Brown},
     [21] = {background = Screen.colors.Gray90},
+    [22] = {background = Screen.colors.LightRed},
   }
 
   it('behavior', function()
@@ -55,6 +58,31 @@ describe('floating windows', function()
     eq(1000, funcs.win_getid())
   end)
 
+  it('closed immediately by autocmd #11383', function()
+    eq('Error executing lua: [string "<nvim>"]:4: Window was closed immediately',
+      pcall_err(exec_lua, [[
+        local a = vim.api
+        local function crashes(contents)
+          local buf = a.nvim_create_buf(false, true)
+          local floatwin = a.nvim_open_win(buf, true, {
+            relative = 'cursor';
+            style = 'minimal';
+            row = 0; col = 0;
+            height = #contents;
+            width = 10;
+          })
+          a.nvim_buf_set_lines(buf, 0, -1, true, contents)
+          local winnr = vim.fn.win_id2win(floatwin)
+          a.nvim_command('wincmd p')
+          a.nvim_command('autocmd CursorMoved * ++once '..winnr..'wincmd c')
+          return buf, floatwin
+        end
+        crashes{'foo'}
+        crashes{'bar'}
+    ]]))
+    assert_alive()
+  end)
+
   local function with_ext_multigrid(multigrid)
     local screen
     before_each(function()
@@ -67,7 +95,7 @@ describe('floating windows', function()
       local buf = meths.create_buf(false,false)
       local win = meths.open_win(buf, false, {relative='editor', width=20, height=2, row=2, col=5})
       local expected_pos = {
-          [3]={{id=1001}, 'NW', 1, 2, 5, true},
+          [4]={{id=1001}, 'NW', 1, 2, 5, true},
       }
 
       if multigrid then
@@ -79,7 +107,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           ^                                        |
           {0:~                                       }|
@@ -88,6 +116,8 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           {1:                    }|
           {2:~                   }|
         ]], float_pos=expected_pos}
@@ -105,8 +135,8 @@ describe('floating windows', function()
 
 
       meths.win_set_config(win, {relative='editor', row=0, col=10})
-      expected_pos[3][4] = 0
-      expected_pos[3][5] = 10
+      expected_pos[4][4] = 0
+      expected_pos[4][5] = 10
       if multigrid then
         screen:expect{grid=[[
         ## grid 1
@@ -116,7 +146,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           ^                                        |
           {0:~                                       }|
@@ -125,6 +155,8 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           {1:                    }|
           {2:~                   }|
         ]], float_pos=expected_pos}
@@ -150,7 +182,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           ^                                        |
           {0:~                                       }|
@@ -158,6 +190,8 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
+        ## grid 3
+                                                  |
         ]])
       else
         screen:expect([[
@@ -182,7 +216,7 @@ describe('floating windows', function()
       local buf = meths.create_buf(false,false)
       local win = meths.open_win(buf, false, {relative='editor', width=20, height=2, row=2, col=5})
       local expected_pos = {
-          [3]={{id=1001}, 'NW', 1, 2, 5, true},
+          [4]={{id=1001}, 'NW', 1, 2, 5, true},
       }
 
       if multigrid then
@@ -194,7 +228,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           ^                                        |
           {0:~                                       }|
@@ -203,6 +237,8 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           {1:                    }|
           {2:~                   }|
         ]], float_pos=expected_pos}
@@ -220,8 +256,8 @@ describe('floating windows', function()
 
 
       meths.win_set_config(win, {relative='editor', row=0, col=10})
-      expected_pos[3][4] = 0
-      expected_pos[3][5] = 10
+      expected_pos[4][4] = 0
+      expected_pos[4][5] = 10
       if multigrid then
         screen:expect{grid=[[
         ## grid 1
@@ -231,7 +267,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           ^                                        |
           {0:~                                       }|
@@ -240,6 +276,8 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           {1:                    }|
           {2:~                   }|
         ]], float_pos=expected_pos}
@@ -265,7 +303,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           ^                                        |
           {0:~                                       }|
@@ -273,6 +311,8 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
+        ## grid 3
+                                                  |
         ]])
       else
         screen:expect([[
@@ -315,7 +355,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           {14:  1 }^x                                   |
           {14:  2 }y                                   |
@@ -324,11 +364,13 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           {18:  1 }{15:x               }|
           {18:  2 }{15:y               }|
           {18:  3 }{15:                }|
           {16:~                   }|
-        ]], float_pos={[3] = {{id = 1001}, "NW", 1, 4, 10, true}}}
+        ]], float_pos={[4] = {{id = 1001}, "NW", 1, 4, 10, true}}}
       else
         screen:expect([[
           {14:  1 }^x                                   |
@@ -352,7 +394,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           {14:  1 }^x                                   |
           {14:  2 }y                                   |
@@ -361,11 +403,13 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           {18:  1 }{15:                }|
           {16:~                   }|
           {16:~                   }|
           {16:~                   }|
-        ]], float_pos={[3] = {{id = 1001}, "NW", 1, 4, 10, true}}}
+        ]], float_pos={[4] = {{id = 1001}, "NW", 1, 4, 10, true}}}
       else
         screen:expect([[
           {14:  1 }^x                                   |
@@ -382,6 +426,7 @@ describe('floating windows', function()
     it("can use 'minimal' style", function()
       command('set number')
       command('set signcolumn=yes')
+      command('set colorcolumn=1')
       command('set cursorline')
       command('set foldcolumn=1')
       command('hi NormalFloat guibg=#333333')
@@ -396,25 +441,27 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
-          {19:   }{20:  1 }{21:^x                                }|
-          {19:   }{14:  2 }y                                |
-          {19:   }{14:  3 }                                 |
+          {19:   }{20:  1 }{22:^x}{21:                                }|
+          {19:   }{14:  2 }{22:y}                                |
+          {19:   }{14:  3 }{22: }                                |
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           {15:x                   }|
           {15:y                   }|
           {15:                    }|
           {15:                    }|
-        ]], float_pos={[3] = {{id = 1001}, "NW", 1, 4, 10, true}}}
+        ]], float_pos={[4] = {{id = 1001}, "NW", 1, 4, 10, true}}}
       else
         screen:expect{grid=[[
-          {19:   }{20:  1 }{21:^x                                }|
-          {19:   }{14:  2 }y                                |
-          {19:   }{14:  3 }   {15:x                   }          |
+          {19:   }{20:  1 }{22:^x}{21:                                }|
+          {19:   }{14:  2 }{22:y}                                |
+          {19:   }{14:  3 }{22: }  {15:x                   }          |
           {0:~         }{15:y                   }{0:          }|
           {0:~         }{15:                    }{0:          }|
           {0:~         }{15:                    }{0:          }|
@@ -434,26 +481,28 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
-          {19: }{17:𐌢̀́̂̃̅̄𐌢̀́̂̃̅̄}{20:  1 }{21:^x                                }|
-          {19:   }{14:  2 }y                                |
-          {19:   }{14:  3 }                                 |
+          {19: }{17:𐌢̀́̂̃̅̄𐌢̀́̂̃̅̄}{20:  1 }{22:^x}{21:                                }|
+          {19:   }{14:  2 }{22:y}                                |
+          {19:   }{14:  3 }{22: }                                |
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           {17:𐌢̀́̂̃̅̄𐌢̀́̂̃̅̄}{15:x                 }|
           {19:  }{15:y                 }|
           {19:  }{15:                  }|
           {15:                    }|
-        ]], float_pos={[3] = {{id = 1001}, "NW", 1, 4, 10, true}}}
+        ]], float_pos={[4] = {{id = 1001}, "NW", 1, 4, 10, true}}}
 
       else
         screen:expect([[
-          {19: }{17:𐌢̀́̂̃̅̄𐌢̀́̂̃̅̄}{20:  1 }{21:^x                                }|
-          {19:   }{14:  2 }y                                |
-          {19:   }{14:  3 }   {17:𐌢̀́̂̃̅̄𐌢̀́̂̃̅̄}{15:x                 }          |
+          {19: }{17:𐌢̀́̂̃̅̄𐌢̀́̂̃̅̄}{20:  1 }{22:^x}{21:                                }|
+          {19:   }{14:  2 }{22:y}                                |
+          {19:   }{14:  3 }{22: }  {17:𐌢̀́̂̃̅̄𐌢̀́̂̃̅̄}{15:x                 }          |
           {0:~         }{19:  }{15:y                 }{0:          }|
           {0:~         }{19:  }{15:                  }{0:          }|
           {0:~         }{15:                    }{0:          }|
@@ -473,25 +522,27 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
-          {19:   }{20:  1 }{21:^x                                }|
-          {19:   }{14:  2 }y                                |
-          {19:   }{14:  3 }                                 |
+          {19:   }{20:  1 }{22:^x}{21:                                }|
+          {19:   }{14:  2 }{22:y}                                |
+          {19:   }{14:  3 }{22: }                                |
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           {15:                    }|
           {15:                    }|
           {15:                    }|
           {15:                    }|
-        ]], float_pos={[3] = {{id = 1001}, "NW", 1, 4, 10, true}}}
+        ]], float_pos={[4] = {{id = 1001}, "NW", 1, 4, 10, true}}}
       else
         screen:expect([[
-          {19:   }{20:  1 }{21:^x                                }|
-          {19:   }{14:  2 }y                                |
-          {19:   }{14:  3 }   {15:                    }          |
+          {19:   }{20:  1 }{22:^x}{21:                                }|
+          {19:   }{14:  2 }{22:y}                                |
+          {19:   }{14:  3 }{22: }  {15:                    }          |
           {0:~         }{15:                    }{0:          }|
           {0:~         }{15:                    }{0:          }|
           {0:~         }{15:                    }{0:          }|
@@ -514,7 +565,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           the background tex^t                     |
           {0:~                                       }|
@@ -522,10 +573,12 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
-        ## grid 4
+        ## grid 3
+                                                  |
+        ## grid 5
           {1:x}|
         ]], float_pos={
-          [4] = {{id = 1002}, "NW", 2, 0, 4, false}
+          [5] = {{id = 1002}, "NW", 2, 0, 4, false}
         }}
       else
         screen:expect([[
@@ -549,7 +602,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           the background tex^t                     |
           {0:~                                       }|
@@ -557,10 +610,12 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
-        ## grid 4
+        ## grid 3
+                                                  |
+        ## grid 5
           {1:x}|
         ]], float_pos={
-          [4] = {{id = 1002}, "NW", 2, 0, 15, false}
+          [5] = {{id = 1002}, "NW", 2, 0, 15, false}
         }}
       else
         screen:expect([[
@@ -584,7 +639,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           the background tex^t                     |
           {0:~                                       }|
@@ -592,6 +647,8 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
+        ## grid 3
+                                                  |
         ]])
       else
         screen:expect([[
@@ -608,26 +665,26 @@ describe('floating windows', function()
 
     it('API has proper error messages', function()
       local buf = meths.create_buf(false,false)
-      eq({false, "Invalid key 'bork'"},
-         meth_pcall(meths.open_win,buf, false, {width=20,height=2,bork=true}))
-      eq({false, "'win' key is only valid with relative='win'"},
-         meth_pcall(meths.open_win,buf, false, {width=20,height=2,relative='editor',row=0,col=0,win=0}))
-      eq({false, "Only one of 'relative' and 'external' must be used"},
-         meth_pcall(meths.open_win,buf, false, {width=20,height=2,relative='editor',row=0,col=0,external=true}))
-      eq({false, "Invalid value of 'relative' key"},
-         meth_pcall(meths.open_win,buf, false, {width=20,height=2,relative='shell',row=0,col=0}))
-      eq({false, "Invalid value of 'anchor' key"},
-         meth_pcall(meths.open_win,buf, false, {width=20,height=2,relative='editor',row=0,col=0,anchor='bottom'}))
-      eq({false, "All of 'relative', 'row', and 'col' has to be specified at once"},
-         meth_pcall(meths.open_win,buf, false, {width=20,height=2,relative='editor'}))
-      eq({false, "'width' key must be a positive Integer"},
-         meth_pcall(meths.open_win,buf, false, {width=-1,height=2,relative='editor'}))
-      eq({false, "'height' key must be a positive Integer"},
-         meth_pcall(meths.open_win,buf, false, {width=20,height=-1,relative='editor'}))
-      eq({false, "'height' key must be a positive Integer"},
-         meth_pcall(meths.open_win,buf, false, {width=20,height=0,relative='editor'}))
-      eq({false, "Must specify 'width' and 'height'"},
-         meth_pcall(meths.open_win,buf, false, {relative='editor'}))
+      eq("Invalid key 'bork'",
+         pcall_err(meths.open_win,buf, false, {width=20,height=2,bork=true}))
+      eq("'win' key is only valid with relative='win'",
+         pcall_err(meths.open_win,buf, false, {width=20,height=2,relative='editor',row=0,col=0,win=0}))
+      eq("Only one of 'relative' and 'external' must be used",
+         pcall_err(meths.open_win,buf, false, {width=20,height=2,relative='editor',row=0,col=0,external=true}))
+      eq("Invalid value of 'relative' key",
+         pcall_err(meths.open_win,buf, false, {width=20,height=2,relative='shell',row=0,col=0}))
+      eq("Invalid value of 'anchor' key",
+         pcall_err(meths.open_win,buf, false, {width=20,height=2,relative='editor',row=0,col=0,anchor='bottom'}))
+      eq("'relative' requires 'row'/'col' or 'bufpos'",
+         pcall_err(meths.open_win,buf, false, {width=20,height=2,relative='editor'}))
+      eq("'width' key must be a positive Integer",
+         pcall_err(meths.open_win,buf, false, {width=-1,height=2,relative='editor'}))
+      eq("'height' key must be a positive Integer",
+         pcall_err(meths.open_win,buf, false, {width=20,height=-1,relative='editor'}))
+      eq("'height' key must be a positive Integer",
+         pcall_err(meths.open_win,buf, false, {width=20,height=0,relative='editor'}))
+      eq("Must specify 'width' and 'height'",
+         pcall_err(meths.open_win,buf, false, {relative='editor'}))
     end)
 
     it('can be placed relative window or cursor', function()
@@ -643,16 +700,18 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           {5:[No Name] [+]                           }|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
           {4:[No Name] [+]                           }|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           just some                               |
           example text                            |
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           jus^t some                               |
           example text                            |
           {0:~                                       }|
@@ -681,24 +740,26 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           {5:[No Name] [+]                           }|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
           {4:[No Name] [+]                           }|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           just some                               |
           example text                            |
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           jus^t some                               |
           example text                            |
           {0:~                                       }|
-        ## grid 4
+        ## grid 5
           {1:                    }|
           {2:~                   }|
         ]], float_pos={
-          [4] = {{id = 1002}, "NW", 3, 0, 10, true}
+          [5] = {{id = 1002}, "NW", 4, 0, 10, true}
         }}
       else
         screen:expect([[
@@ -722,24 +783,26 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           {5:[No Name] [+]                           }|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
           {4:[No Name] [+]                           }|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           just some                               |
           example text                            |
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           jus^t some                               |
           example text                            |
           {0:~                                       }|
-        ## grid 4
+        ## grid 5
           {1:                    }|
           {2:~                   }|
         ]], float_pos={
-          [4] = {{id = 1002}, "NW", 3, 1, 1, true}
+          [5] = {{id = 1002}, "NW", 4, 1, 1, true}
         }}
       else
         screen:expect([[
@@ -763,24 +826,26 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           {5:[No Name] [+]                           }|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
           {4:[No Name] [+]                           }|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           just some                               |
           example text                            |
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           jus^t some                               |
           example text                            |
           {0:~                                       }|
-        ## grid 4
+        ## grid 5
           {1:                    }|
           {2:~                   }|
         ]], float_pos={
-          [4] = {{id = 1002}, "SW", 3, 0, 3, true}
+          [5] = {{id = 1002}, "SW", 4, 0, 3, true}
         }}
       else
         screen:expect([[
@@ -805,24 +870,26 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           {5:[No Name] [+]                           }|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
           {4:[No Name] [+]                           }|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           just some                               |
           example text                            |
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           jus^t some                               |
           example text                            |
           {0:~                                       }|
-        ## grid 4
+        ## grid 5
           {1:                    }|
           {2:~                   }|
         ]], float_pos={
-          [4] = {{id = 1002}, "NW", 2, 1, 10, true}
+          [5] = {{id = 1002}, "NW", 2, 1, 10, true}
         }}
       else
         screen:expect([[
@@ -846,24 +913,26 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           {5:[No Name] [+]                           }|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
           {4:[No Name] [+]                           }|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           just some                               |
           example text                            |
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           jus^t some                               |
           example text                            |
           {0:~                                       }|
-        ## grid 4
+        ## grid 5
           {1:                    }|
           {2:~                   }|
         ]], float_pos={
-          [4] = {{id = 1002}, "SE", 2, 3, 39, true}
+          [5] = {{id = 1002}, "SE", 2, 3, 39, true}
         }}
       else
         screen:expect([[
@@ -887,24 +956,26 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           {5:[No Name] [+]                           }|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
-          [3:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
+          [4:----------------------------------------]|
           {4:[No Name] [+]                           }|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           just some                               |
           example text                            |
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           jus^t some                               |
           example text                            |
           {0:~                                       }|
-        ## grid 4
+        ## grid 5
           {1:                    }|
           {2:~                   }|
         ]], float_pos={
-          [4] = {{id = 1002}, "NE", 3, 0, 50, true}
+          [5] = {{id = 1002}, "NE", 4, 0, 50, true}
         }}
       else
         screen:expect([[
@@ -921,6 +992,335 @@ describe('floating windows', function()
       end
     end)
 
+    it('can be placed relative text in a window', function()
+      screen:try_resize(30,5)
+      local firstwin = meths.get_current_win().id
+      meths.buf_set_lines(0, 0, -1, true, {'just some', 'example text that is wider than the window', '', '', 'more text'})
+      if multigrid then
+        screen:expect{grid=[[
+        ## grid 1
+          [2:------------------------------]|
+          [2:------------------------------]|
+          [2:------------------------------]|
+          [2:------------------------------]|
+          [3:------------------------------]|
+        ## grid 2
+          ^just some                     |
+          example text that is wider tha|
+          n the window                  |
+                                        |
+        ## grid 3
+                                        |
+        ]]}
+      else
+        screen:expect{grid=[[
+          ^just some                     |
+          example text that is wider tha|
+          n the window                  |
+                                        |
+                                        |
+        ]]}
+      end
+
+      local buf = meths.create_buf(false,false)
+      meths.buf_set_lines(buf, 0, -1, true, {'some info!'})
+
+      local win = meths.open_win(buf, false, {relative='win', width=12, height=1, bufpos={1,32}})
+      if multigrid then
+        screen:expect{grid=[[
+        ## grid 1
+          [2:------------------------------]|
+          [2:------------------------------]|
+          [2:------------------------------]|
+          [2:------------------------------]|
+          [3:------------------------------]|
+        ## grid 2
+          ^just some                     |
+          example text that is wider tha|
+          n the window                  |
+                                        |
+        ## grid 3
+                                        |
+        ## grid 5
+          {1:some info!  }|
+        ]], float_pos={
+          [5] = { {
+              id = 1002
+            }, "NW", 2, 3, 2, true }
+        }}
+      else
+        screen:expect{grid=[[
+          ^just some                     |
+          example text that is wider tha|
+          n the window                  |
+            {1:some info!  }                |
+                                        |
+        ]]}
+      end
+      eq({relative='win', width=12, height=1, bufpos={1,32}, anchor='NW',
+          external=false, col=0, row=1, win=firstwin, focusable=true}, meths.win_get_config(win))
+
+      feed('<c-e>')
+      if multigrid then
+        screen:expect{grid=[[
+        ## grid 1
+          [2:------------------------------]|
+          [2:------------------------------]|
+          [2:------------------------------]|
+          [2:------------------------------]|
+          [3:------------------------------]|
+        ## grid 2
+          ^example text that is wider tha|
+          n the window                  |
+                                        |
+                                        |
+        ## grid 3
+                                        |
+        ## grid 5
+          {1:some info!  }|
+        ]], float_pos={
+          [5] = { {
+              id = 1002
+            }, "NW", 2, 2, 2, true }
+        }}
+      else
+        screen:expect{grid=[[
+          ^example text that is wider tha|
+          n the window                  |
+            {1:some info!  }                |
+                                        |
+                                        |
+        ]]}
+      end
+
+
+      screen:try_resize(45,5)
+      if multigrid then
+        screen:expect{grid=[[
+        ## grid 1
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [3:---------------------------------------------]|
+        ## grid 2
+          ^example text that is wider than the window   |
+                                                       |
+                                                       |
+          more text                                    |
+        ## grid 3
+                                                       |
+        ## grid 5
+          {1:some info!  }|
+        ]], float_pos={
+          [5] = { {
+              id = 1002
+            }, "NW", 2, 1, 32, true }
+        }}
+      else
+        -- note: appears misalinged due to cursor
+        screen:expect{grid=[[
+          ^example text that is wider than the window   |
+                                          {1:some info!  } |
+                                                       |
+          more text                                    |
+                                                       |
+        ]]}
+      end
+
+      screen:try_resize(25,10)
+      if multigrid then
+        screen:expect{grid=[[
+        ## grid 1
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [3:-------------------------]|
+        ## grid 2
+          ^example text that is wide|
+          r than the window        |
+                                   |
+                                   |
+          more text                |
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+        ## grid 3
+                                   |
+        ## grid 5
+          {1:some info!  }|
+        ]], float_pos={
+          [5] = { {
+              id = 1002
+            }, "NW", 2, 2, 7, true }
+        }}
+      else
+        screen:expect{grid=[[
+          ^example text that is wide|
+          r than the window        |
+                 {1:some info!  }      |
+                                   |
+          more text                |
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+                                   |
+        ]]}
+      end
+
+      meths.win_set_config(win, {relative='win', bufpos={1,32}, anchor='SW'})
+      if multigrid then
+        screen:expect{grid=[[
+        ## grid 1
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [3:-------------------------]|
+        ## grid 2
+          ^example text that is wide|
+          r than the window        |
+                                   |
+                                   |
+          more text                |
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+        ## grid 3
+                                   |
+        ## grid 5
+          {1:some info!  }|
+        ]], float_pos={
+          [5] = { {
+              id = 1002
+            }, "SW", 2, 1, 7, true }
+        }}
+      else
+        screen:expect{grid=[[
+          ^example{1:some info!  }s wide|
+          r than the window        |
+                                   |
+                                   |
+          more text                |
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+                                   |
+        ]]}
+      end
+
+      meths.win_set_config(win, {relative='win', bufpos={1,32}, anchor='NW', col=-2})
+      if multigrid then
+        screen:expect{grid=[[
+        ## grid 1
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [3:-------------------------]|
+        ## grid 2
+          ^example text that is wide|
+          r than the window        |
+                                   |
+                                   |
+          more text                |
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+        ## grid 3
+                                   |
+        ## grid 5
+          {1:some info!  }|
+        ]], float_pos={
+          [5] = { {
+              id = 1002
+            }, "NW", 2, 2, 5, true }
+        }}
+      else
+        screen:expect{grid=[[
+          ^example text that is wide|
+          r than the window        |
+               {1:some info!  }        |
+                                   |
+          more text                |
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+                                   |
+        ]]}
+      end
+
+      meths.win_set_config(win, {relative='win', bufpos={1,32}, row=2})
+      if multigrid then
+        screen:expect{grid=[[
+        ## grid 1
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [2:-------------------------]|
+          [3:-------------------------]|
+        ## grid 2
+          ^example text that is wide|
+          r than the window        |
+                                   |
+                                   |
+          more text                |
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+        ## grid 3
+                                   |
+        ## grid 5
+          {1:some info!  }|
+        ]], float_pos={
+          [5] = { {
+              id = 1002
+            }, "NW", 2, 3, 7, true }
+        }}
+      else
+        screen:expect{grid=[[
+          ^example text that is wide|
+          r than the window        |
+                                   |
+                 {1:some info!  }      |
+          more text                |
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+          {0:~                        }|
+                                   |
+        ]]}
+      end
+    end)
+
     it('validates cursor even when window is not entered', function()
       screen:try_resize(30,5)
       command("set nowrap")
@@ -932,12 +1332,14 @@ describe('floating windows', function()
           [2:------------------------------]|
           [2:------------------------------]|
           [2:------------------------------]|
-                                        |
+          [3:------------------------------]|
         ## grid 2
           that is wider than the windo^w |
           {0:~                             }|
           {0:~                             }|
           {0:~                             }|
+        ## grid 3
+                                        |
         ]])
       else
         screen:expect([[
@@ -959,16 +1361,18 @@ describe('floating windows', function()
           [2:------------------------------]|
           [2:------------------------------]|
           [2:------------------------------]|
-                                        |
+          [3:------------------------------]|
         ## grid 2
           that is wider than the windo^w |
           {0:~                             }|
           {0:~                             }|
           {0:~                             }|
-        ## grid 4
+        ## grid 3
+                                        |
+        ## grid 5
           {1:some floaty text    }|
         ]], float_pos={
-          [4] = {{id = 1002}, "NW", 1, 3, 1, true}
+          [5] = {{id = 1002}, "NW", 1, 3, 1, true}
         }}
       else
         screen:expect([[
@@ -1024,7 +1428,7 @@ describe('floating windows', function()
       meths.buf_set_lines(buf, 0, -1, true, {'such', 'very', 'float'})
       local win = meths.open_win(buf, false, {relative='editor', width=15, height=4, row=2, col=10})
       local expected_pos = {
-          [4]={{id=1002}, 'NW', 1, 2, 10, true},
+          [5]={{id=1002}, 'NW', 1, 2, 10, true},
       }
       if multigrid then
         screen:expect{grid=[[
@@ -1035,7 +1439,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           ^                                        |
           {0:~                                       }|
@@ -1043,7 +1447,9 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
-        ## grid 4
+        ## grid 3
+                                                  |
+        ## grid 5
           {1:such           }|
           {1:very           }|
           {1:float          }|
@@ -1069,13 +1475,15 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           ^                                        |
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
-        ## grid 4
+        ## grid 3
+                                                  |
+        ## grid 5
           {1:such           }|
           {1:very           }|
           {1:float          }|
@@ -1098,12 +1506,14 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           ^                                        |
           {0:~                                       }|
           {0:~                                       }|
-        ## grid 4
+        ## grid 3
+                                                  |
+        ## grid 5
           {1:such           }|
           {1:very           }|
           {1:float          }|
@@ -1124,11 +1534,13 @@ describe('floating windows', function()
         ## grid 1
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           ^                                        |
           {0:~                                       }|
-        ## grid 4
+        ## grid 3
+                                                  |
+        ## grid 5
           {1:such           }|
           {1:very           }|
           {1:float          }|
@@ -1147,11 +1559,13 @@ describe('floating windows', function()
         ## grid 1
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
                                                   |
           {0:~                                       }|
-        ## grid 4
+        ## grid 3
+                                                  |
+        ## grid 5
           {1:such           }|
           {1:very           }|
           {1:^float          }|
@@ -1175,7 +1589,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
                                                   |
           {0:~                                       }|
@@ -1183,7 +1597,9 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
-        ## grid 4
+        ## grid 3
+                                                  |
+        ## grid 5
           {1:such           }|
           {1:very           }|
           {1:^float          }|
@@ -1212,7 +1628,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
                                                   |
           {0:~                                       }|
@@ -1220,7 +1636,9 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
-        ## grid 4
+        ## grid 3
+                                                  |
+        ## grid 5
           {1:^such           }|
           {1:very           }|
           {1:float          }|
@@ -1247,7 +1665,7 @@ describe('floating windows', function()
           [2:--------------------------]|
           [2:--------------------------]|
           [2:--------------------------]|
-                                    |
+          [3:--------------------------]|
         ## grid 2
                                     |
           {0:~                         }|
@@ -1255,7 +1673,9 @@ describe('floating windows', function()
           {0:~                         }|
           {0:~                         }|
           {0:~                         }|
-        ## grid 4
+        ## grid 3
+                                    |
+        ## grid 5
           {1:^such           }|
           {1:very           }|
           {1:float          }|
@@ -1282,7 +1702,7 @@ describe('floating windows', function()
           [2:-------------------------]|
           [2:-------------------------]|
           [2:-------------------------]|
-                                   |
+          [3:-------------------------]|
         ## grid 2
                                    |
           {0:~                        }|
@@ -1290,7 +1710,9 @@ describe('floating windows', function()
           {0:~                        }|
           {0:~                        }|
           {0:~                        }|
-        ## grid 4
+        ## grid 3
+                                   |
+        ## grid 5
           {1:^such           }|
           {1:very           }|
           {1:float          }|
@@ -1317,7 +1739,7 @@ describe('floating windows', function()
           [2:------------------------]|
           [2:------------------------]|
           [2:------------------------]|
-                                  |
+          [3:------------------------]|
         ## grid 2
                                   |
           {0:~                       }|
@@ -1325,7 +1747,9 @@ describe('floating windows', function()
           {0:~                       }|
           {0:~                       }|
           {0:~                       }|
-        ## grid 4
+        ## grid 3
+                                  |
+        ## grid 5
           {1:^such           }|
           {1:very           }|
           {1:float          }|
@@ -1352,7 +1776,7 @@ describe('floating windows', function()
           [2:----------------]|
           [2:----------------]|
           [2:----------------]|
-                          |
+          [3:----------------]|
         ## grid 2
                           |
           {0:~               }|
@@ -1360,7 +1784,9 @@ describe('floating windows', function()
           {0:~               }|
           {0:~               }|
           {0:~               }|
-        ## grid 4
+        ## grid 3
+                          |
+        ## grid 5
           {1:^such           }|
           {1:very           }|
           {1:float          }|
@@ -1387,7 +1813,7 @@ describe('floating windows', function()
           [2:---------------]|
           [2:---------------]|
           [2:---------------]|
-                         |
+          [3:---------------]|
         ## grid 2
                          |
           {0:~              }|
@@ -1395,7 +1821,9 @@ describe('floating windows', function()
           {0:~              }|
           {0:~              }|
           {0:~              }|
-        ## grid 4
+        ## grid 3
+                         |
+        ## grid 5
           {1:^such           }|
           {1:very           }|
           {1:float          }|
@@ -1422,7 +1850,7 @@ describe('floating windows', function()
           [2:--------------]|
           [2:--------------]|
           [2:--------------]|
-                        |
+          [3:--------------]|
         ## grid 2
                         |
           {0:~             }|
@@ -1430,7 +1858,9 @@ describe('floating windows', function()
           {0:~             }|
           {0:~             }|
           {0:~             }|
-        ## grid 4
+        ## grid 3
+                        |
+        ## grid 5
           {1:^such           }|
           {1:very           }|
           {1:float          }|
@@ -1457,7 +1887,7 @@ describe('floating windows', function()
           [2:------------]|
           [2:------------]|
           [2:------------]|
-                      |
+          [3:------------]|
         ## grid 2
                       |
           {0:~           }|
@@ -1465,7 +1895,9 @@ describe('floating windows', function()
           {0:~           }|
           {0:~           }|
           {0:~           }|
-        ## grid 4
+        ## grid 3
+                      |
+        ## grid 5
           {1:^such           }|
           {1:very           }|
           {1:float          }|
@@ -1488,10 +1920,12 @@ describe('floating windows', function()
         screen:expect{grid=[[
         ## grid 1
           [2:------------]|
-                      |
+          [3:------------]|
         ## grid 2
                       |
-        ## grid 4
+        ## grid 3
+                      |
+        ## grid 5
           {1:^such           }|
           {1:very           }|
           {1:float          }|
@@ -1513,7 +1947,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
                                                   |
           {0:~                                       }|
@@ -1521,7 +1955,9 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
-        ## grid 4
+        ## grid 3
+                                                  |
+        ## grid 5
           {1:^such           }|
           {1:very           }|
           {1:float          }|
@@ -1541,7 +1977,7 @@ describe('floating windows', function()
 
     it('does not crash with inccommand #9379', function()
       local expected_pos = {
-        [3]={{id=1001}, 'NW', 1, 2, 0, true},
+        [4]={{id=1001}, 'NW', 1, 2, 0, true},
       }
 
       command("set inccommand=split")
@@ -1564,7 +2000,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name]                               }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
                                                     |
             {0:~                                       }|
@@ -1572,6 +2008,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:foo                           }|
             {1:bar                           }|
             {1:^                              }|
@@ -1599,10 +2037,12 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[Preview]                               }|
-            :%s/.^                                   |
+            [3:----------------------------------------]|
           ## grid 2
                                                     |
           ## grid 3
+            :%s/.^                                   |
+          ## grid 4
             {17:f}{1:oo                           }|
             {17:b}{1:ar                           }|
             {1:                              }|
@@ -1630,7 +2070,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name]                               }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
                                                     |
             {0:~                                       }|
@@ -1638,6 +2078,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:foo                           }|
             {1:bar                           }|
             {1:^                              }|
@@ -1676,7 +2118,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
                                                     |
             {0:~                                       }|
@@ -1685,12 +2127,14 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {7:^            }|
             {12:~           }|
             {12:~           }|
             {12:~           }|
           ]], float_pos={
-            [3] = {{ id = 1001 }, "NW", 1, 2, 5, true},
+            [4] = {{ id = 1001 }, "NW", 1, 2, 5, true},
           }}
         else
           screen:expect([[
@@ -1717,7 +2161,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
                                                     |
             {0:~                                       }|
@@ -1726,17 +2170,19 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {7:x aa^        }|
             {12:~           }|
             {12:~           }|
             {12:~           }|
-          ## grid 4
+          ## grid 5
             {13: aa             }|
             {1: word           }|
             {1: longtext       }|
           ]], float_pos={
-            [3] = {{ id = 1001 }, "NW", 1, 2, 5, true},
-            [4] = {{ id = -1 }, "NW", 3, 1, 1, false}
+            [4] = {{ id = 1001 }, "NW", 1, 2, 5, true},
+            [5] = {{ id = -1 }, "NW", 4, 1, 1, false}
           }}
         else
           screen:expect([[
@@ -1760,7 +2206,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
                                                     |
             {0:~                                       }|
@@ -1769,12 +2215,14 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {7:x a^a        }|
             {12:~           }|
             {12:~           }|
             {12:~           }|
           ]], float_pos={
-            [3] = {{ id = 1001 }, "NW", 1, 2, 5, true},
+            [4] = {{ id = 1001 }, "NW", 1, 2, 5, true},
           }}
 
         else
@@ -1800,7 +2248,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             xx^                                      |
             {0:~                                       }|
@@ -1809,17 +2257,19 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {7:x aa        }|
             {12:~           }|
             {12:~           }|
             {12:~           }|
-          ## grid 4
+          ## grid 5
             {13:xx             }|
             {1:yy             }|
             {1:zz             }|
           ]], float_pos={
-            [3] = {{ id = 1001 }, "NW", 1, 2, 5, true},
-            [4] = {{ id = -1 }, "NW", 2, 1, 0, false}
+            [4] = {{ id = 1001 }, "NW", 1, 2, 5, true},
+            [5] = {{ id = -1 }, "NW", 2, 1, 0, false}
           }}
         else
           screen:expect([[
@@ -1843,7 +2293,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             xx^                                      |
             {0:~                                       }|
@@ -1852,12 +2302,14 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {7:x aa        }|
             {12:~           }|
             {12:~           }|
             {12:~           }|
           ]], float_pos={
-            [3] = {{ id = 1001 }, "NW", 1, 2, 5, true},
+            [4] = {{ id = 1001 }, "NW", 1, 2, 5, true},
           }}
         else
           screen:expect([[
@@ -1886,7 +2338,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
                                                     |
             {0:~                                       }|
@@ -1895,14 +2347,16 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {7:x aa^        }|
             {12:~           }|
             {12:~           }|
             {12:~           }|
           ]], float_pos={
-            [3] = {{ id = 1001 }, "NW", 1, 2, 5, true},
+            [4] = {{ id = 1001 }, "NW", 1, 2, 5, true},
           }, popupmenu={
-            anchor = {3, 0, 2}, items = items, pos = 0
+            anchor = {4, 0, 2}, items = items, pos = 0
           }}
         else
           screen:expect{grid=[[
@@ -1928,7 +2382,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
                                                     |
             {0:~                                       }|
@@ -1937,12 +2391,14 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {7:x a^a        }|
             {12:~           }|
             {12:~           }|
             {12:~           }|
           ]], float_pos={
-            [3] = {{ id = 1001 }, "NW", 1, 2, 5, true},
+            [4] = {{ id = 1001 }, "NW", 1, 2, 5, true},
           }}
         else
           screen:expect([[
@@ -1968,7 +2424,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             xx^                                      |
             {0:~                                       }|
@@ -1977,12 +2433,14 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {7:x aa        }|
             {12:~           }|
             {12:~           }|
             {12:~           }|
           ]], float_pos={
-            [3] = {{ id = 1001 }, "NW", 1, 2, 5, true},
+            [4] = {{ id = 1001 }, "NW", 1, 2, 5, true},
           }, popupmenu={
             anchor = {2, 0, 0}, items = items, pos = 0
           }}
@@ -2010,7 +2468,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             xx^                                      |
             {0:~                                       }|
@@ -2019,12 +2477,14 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {7:x aa        }|
             {12:~           }|
             {12:~           }|
             {12:~           }|
           ]], float_pos={
-            [3] = {{ id = 1001 }, "NW", 1, 2, 5, true},
+            [4] = {{ id = 1001 }, "NW", 1, 2, 5, true},
           }}
         else
           screen:expect([[
@@ -2055,7 +2515,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             aa^                                      |
             {0:~                                       }|
@@ -2064,11 +2524,13 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {13:aa             }|
             {1:word           }|
             {1:longtext       }|
           ]], float_pos={
-            [3] = {{id = -1}, "NW", 2, 1, 0, false}}
+            [4] = {{id = -1}, "NW", 2, 1, 0, false}}
           }
         else
           screen:expect([[
@@ -2094,7 +2556,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             aa^                                      |
             {0:~                                       }|
@@ -2103,15 +2565,17 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {13:aa             }|
             {1:word           }|
             {1:longtext       }|
-          ## grid 5
+          ## grid 6
             {15:some info   }|
             {15:about item  }|
           ]], float_pos={
-            [3] = {{id = -1}, "NW", 2, 1, 0, false},
-            [5] = {{id = 1002}, "NW", 2, 1, 12, true},
+            [4] = {{id = -1}, "NW", 2, 1, 0, false},
+            [6] = {{id = 1002}, "NW", 2, 1, 12, true},
           }}
         else
           screen:expect([[
@@ -2137,7 +2601,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             aa^                                      |
             {0:~                                       }|
@@ -2145,11 +2609,13 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
             {0:~                                       }|
-          ## grid 5
+          ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 6
             {15:some info   }|
             {15:about item  }|
           ]], float_pos={
-            [5] = {{id = 1002}, "NW", 2, 1, 12, true},
+            [6] = {{id = 1002}, "NW", 2, 1, 12, true},
           }}
         else
           screen:expect([[
@@ -2173,7 +2639,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             aa^                                      |
             {0:~                                       }|
@@ -2181,6 +2647,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
             {0:~                                       }|
+          ## grid 3
+            {3:-- INSERT --}                            |
           ]])
         else
           screen:expect([[
@@ -2206,7 +2674,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             aa^                                      |
             {0:~                                       }|
@@ -2215,11 +2683,13 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {13:aa             }|
             {1:word           }|
             {1:longtext       }|
           ]], float_pos={
-            [3] = {{id = -1}, "NW", 2, 1, 0, false},
+            [4] = {{id = -1}, "NW", 2, 1, 0, false},
           }}
         else
           screen:expect([[
@@ -2243,7 +2713,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             aa^                                      |
             {0:~                                       }|
@@ -2251,6 +2721,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
             {0:~                                       }|
+          ## grid 3
+            {3:-- INSERT --}                            |
           ]])
         else
           screen:expect([[
@@ -2278,7 +2750,7 @@ describe('floating windows', function()
         win = meths.open_win(buf, false, {relative='editor', width=20, height=2, row=2, col=5})
         meths.buf_set_lines(buf,0,-1,true,{"y"})
         expected_pos = {
-          [3]={{id=1001}, 'NW', 1, 2, 5, true}
+          [4]={{id=1001}, 'NW', 1, 2, 5, true}
         }
         if multigrid then
           screen:expect{grid=[[
@@ -2289,7 +2761,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -2298,6 +2770,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2325,7 +2799,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -2334,6 +2808,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2359,7 +2835,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -2368,6 +2844,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2386,7 +2864,7 @@ describe('floating windows', function()
 
       it("w with focusable=false", function()
         meths.win_set_config(win, {focusable=false})
-        expected_pos[3][6] = false
+        expected_pos[4][6] = false
         feed("<c-w>wi") -- i to provoke redraw
         if multigrid then
           screen:expect{grid=[[
@@ -2397,7 +2875,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -2406,6 +2884,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2431,7 +2911,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -2440,6 +2920,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2467,7 +2949,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -2476,6 +2958,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2501,7 +2985,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -2510,6 +2994,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2528,7 +3014,7 @@ describe('floating windows', function()
 
       it("focus by mouse", function()
         if multigrid then
-          meths.input_mouse('left', 'press', '', 3, 0, 0)
+          meths.input_mouse('left', 'press', '', 4, 0, 0)
           screen:expect{grid=[[
           ## grid 1
             [2:----------------------------------------]|
@@ -2537,7 +3023,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -2546,6 +3032,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2572,7 +3060,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -2581,6 +3069,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2601,9 +3091,9 @@ describe('floating windows', function()
       it("focus by mouse (focusable=false)", function()
         meths.win_set_config(win, {focusable=false})
         meths.buf_set_lines(0, -1, -1, true, {"a"})
-        expected_pos[3][6] = false
+        expected_pos[4][6] = false
         if multigrid then
-          meths.input_mouse('left', 'press', '', 3, 0, 0)
+          meths.input_mouse('left', 'press', '', 4, 0, 0)
           screen:expect{grid=[[
           ## grid 1
             [2:----------------------------------------]|
@@ -2612,7 +3102,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             a                                       |
@@ -2621,6 +3111,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2647,7 +3139,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             a                                       |
@@ -2656,6 +3148,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos, unchanged=true}
@@ -2685,7 +3179,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -2694,6 +3188,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2719,7 +3215,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -2728,6 +3224,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2753,7 +3251,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -2762,6 +3260,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2790,7 +3290,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -2799,6 +3299,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -2824,7 +3326,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -2833,6 +3335,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
             {2:~                   }|
@@ -2859,7 +3363,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -2868,6 +3372,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
           ]], float_pos=expected_pos}
         else
@@ -2892,7 +3398,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -2901,6 +3407,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
             {2:~                   }|
@@ -2928,7 +3436,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -2937,6 +3445,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
             {2:~                   }|
@@ -2968,7 +3478,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -2977,6 +3487,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -3002,7 +3514,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -3011,6 +3523,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                    }|
             {2:~                    }|
           ]], float_pos=expected_pos}
@@ -3036,7 +3550,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -3045,6 +3559,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y          }|
             {2:~          }|
           ]], float_pos=expected_pos}
@@ -3070,7 +3586,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -3079,6 +3595,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y              }|
             {2:~              }|
           ]], float_pos=expected_pos}
@@ -3104,7 +3622,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -3113,6 +3631,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                                       }|
             {2:~                                       }|
           ]], float_pos=expected_pos}
@@ -3134,20 +3654,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {4:[No Name] [+]                           }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^x                                       |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3167,20 +3689,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {5:[No Name] [+]                           }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {4:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             x                                       |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3200,20 +3724,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {5:[No Name] [+]                           }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             x                                       |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3234,20 +3760,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {4:[No Name] [+]                           }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^x                                       |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3269,20 +3797,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {4:[No Name] [+]                           }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^y                                       |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3302,20 +3832,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {5:[No Name] [+]                           }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {4:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             y                                       |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3335,20 +3867,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {5:[No Name] [+]                           }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {4:[No Name] [+]                           }|
-            {3:-- INSERT --}                            |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
           ## grid 3
+            {3:-- INSERT --}                            |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             y                                       |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3370,20 +3904,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {4:[No Name]                               }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-            :new                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+            :new                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^                                        |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3405,20 +3941,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {4:[No Name]                               }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-            :new                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+            :new                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^                                        |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3440,13 +3978,13 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
             {4:[No Name] [+]        }{5:[No Name] [+]      }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                  |
             {0:~                  }|
@@ -3454,9 +3992,11 @@ describe('floating windows', function()
             {0:~                  }|
             {0:~                  }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^x                   |
             {0:~                   }|
             {0:~                   }|
@@ -3481,13 +4021,13 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
             {4:[No Name]            }{5:[No Name] [+]      }|
-            :vnew                                   |
+            [3:----------------------------------------]|
           ## grid 2
             x                  |
             {0:~                  }|
@@ -3495,9 +4035,11 @@ describe('floating windows', function()
             {0:~                  }|
             {0:~                  }|
           ## grid 3
+            :vnew                                   |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^                    |
             {0:~                   }|
             {0:~                   }|
@@ -3522,13 +4064,13 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
-            [4:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
+            [5:--------------------]{5:│}[2:-------------------]|
             {4:[No Name]            }{5:[No Name] [+]      }|
-            :vnew                                   |
+            [3:----------------------------------------]|
           ## grid 2
             x                  |
             {0:~                  }|
@@ -3536,9 +4078,11 @@ describe('floating windows', function()
             {0:~                  }|
             {0:~                  }|
           ## grid 3
+            :vnew                                   |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^                    |
             {0:~                   }|
             {0:~                   }|
@@ -3594,7 +4138,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -3603,14 +4147,16 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             {1:^y                   }|
             {2:~                   }|
           ]], float_pos={
-            [3] = {{id = 1001}, "NW", 1, 2, 5, true},
-            [4] = {{id = 1002}, "NW", 1, 4, 8, true}
+            [4] = {{id = 1001}, "NW", 1, 2, 5, true},
+            [5] = {{id = 1002}, "NW", 1, 4, 8, true}
           }}
          else
           screen:expect([[
@@ -3634,7 +4180,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-            :quit                                   |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -3642,10 +4188,12 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            :quit                                   |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
           ]], float_pos={
-            [3] = {{id = 1001}, "NW", 1, 2, 5, true},
+            [4] = {{id = 1001}, "NW", 1, 2, 5, true},
           }}
          else
           screen:expect([[
@@ -3669,7 +4217,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            :quit                                   |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -3677,6 +4225,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
             {0:~                                       }|
+          ## grid 3
+            :quit                                   |
           ]])
          else
           screen:expect([[
@@ -3704,7 +4254,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -3712,6 +4262,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
             {0:~                                       }|
+          ## grid 3
+                                                    |
         ]]}
         else
           screen:expect([[
@@ -3734,10 +4286,10 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            {4:                                        }|
-            {7:E5601: Cannot close window, only floatin}|
-            {7:g window would remain}                   |
-            {8:Press ENTER or type command to continue}^ |
+            [2:----------------------------------------]|
+            [3:----------------------------------------]|
+            [3:----------------------------------------]|
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -3746,6 +4298,10 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            {7:E5601: Cannot close window, only floatin}|
+            {7:g window would remain}                   |
+            {8:Press ENTER or type command to continue}^ |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -3772,7 +4328,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -3781,6 +4337,8 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
         ]], float_pos=expected_pos}
@@ -3802,20 +4360,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {4:[No Name] [+]                           }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^x                                       |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3835,14 +4395,16 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [3:----------------------------------------]|
+          ## grid 3
                                                     |
-          ## grid 4
+          ## grid 5
             ^x                                       |
             {0:~                                       }|
             {0:~                                       }|
@@ -3868,20 +4430,22 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {5:[No Name] [+]                           }|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:^y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             x                                       |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3901,20 +4465,24 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
             {5:[No Name] [+]                           }|
-            {4:                                        }|
-            {7:E5601: Cannot close window, only floatin}|
-            {7:g window would remain}                   |
-            {8:Press ENTER or type command to continue}^ |
+            [2:----------------------------------------]|
+            [3:----------------------------------------]|
+            [3:----------------------------------------]|
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+            {7:E5601: Cannot close window, only floatin}|
+            {7:g window would remain}                   |
+            {8:Press ENTER or type command to continue}^ |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             x                                       |
             {0:~                                       }|
         ]], float_pos=expected_pos}
@@ -3939,14 +4507,16 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-            [3:----------------------------------------]|
-            [3:----------------------------------------]|
+            [4:----------------------------------------]|
+            [4:----------------------------------------]|
             {4:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             ^y                                       |
             {0:~                                       }|
         ]]}
@@ -3964,7 +4534,7 @@ describe('floating windows', function()
 
         if multigrid then
           meths.win_set_config(0, {external=true, width=30, height=2})
-          expected_pos = {[3]={external=true}}
+          expected_pos = {[4]={external=true}}
           screen:expect{grid=[[
           ## grid 1
             [2:----------------------------------------]|
@@ -3973,7 +4543,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
@@ -3981,12 +4551,14 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             ^y                             |
             {0:~                             }|
         ]], float_pos=expected_pos}
         else
-          eq({false, "UI doesn't support external windows"},
-             meth_pcall(meths.win_set_config, 0, {external=true, width=30, height=2}))
+          eq("UI doesn't support external windows",
+             pcall_err(meths.win_set_config, 0, {external=true, width=30, height=2}))
           return
         end
 
@@ -3997,14 +4569,16 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             {5:[No Name] [+]                           }|
-            [3:----------------------------------------]|
-            [3:----------------------------------------]|
+            [4:----------------------------------------]|
+            [4:----------------------------------------]|
             {4:[No Name] [+]                           }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                                       |
             {0:~                                       }|
           ## grid 3
+                                                    |
+          ## grid 4
             ^y                                       |
             {0:~                                       }|
           ]])
@@ -4017,26 +4591,28 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [5:--------------------]{5:│}[4:-------------------]|
-            [5:--------------------]{5:│}[4:-------------------]|
+            [6:--------------------]{5:│}[5:-------------------]|
+            [6:--------------------]{5:│}[5:-------------------]|
             {5:[No Name] [+]        [No Name] [+]      }|
-            [6:--------------------]{5:│}[2:-------------------]|
-            [6:--------------------]{5:│}[2:-------------------]|
+            [7:--------------------]{5:│}[2:-------------------]|
+            [7:--------------------]{5:│}[2:-------------------]|
             {4:[No Name] [+]        }{5:[No Name] [+]      }|
-                                                    |
+            [3:----------------------------------------]|
           ## grid 2
             x                  |
             {0:~                  }|
           ## grid 3
+                                                    |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             x                  |
             {0:~                  }|
-          ## grid 5
+          ## grid 6
             x                   |
             {0:~                   }|
-          ## grid 6
+          ## grid 7
             ^x                   |
             {0:~                   }|
         ]], float_pos=expected_pos}
@@ -4062,26 +4638,28 @@ describe('floating windows', function()
         if multigrid then
           screen:expect{grid=[[
           ## grid 1
-            [5:-------------------]{5:│}[4:--------------------]|
-            [5:-------------------]{5:│}[4:--------------------]|
+            [6:-------------------]{5:│}[5:--------------------]|
+            [6:-------------------]{5:│}[5:--------------------]|
             {5:[No Name] [+]       [No Name] [+]       }|
-            [6:-------------------]{5:│}[2:--------------------]|
-            [6:-------------------]{5:│}[2:--------------------]|
+            [7:-------------------]{5:│}[2:--------------------]|
+            [7:-------------------]{5:│}[2:--------------------]|
             {5:[No Name] [+]       [No Name] [+]       }|
-            :enew                                   |
+            [3:----------------------------------------]|
           ## grid 2
             4                   |
             {0:~                   }|
           ## grid 3
+            :enew                                   |
+          ## grid 4
             {1:^5                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             2                   |
             {0:~                   }|
-          ## grid 5
+          ## grid 6
             1                  |
             {0:~                  }|
-          ## grid 6
+          ## grid 7
             3                  |
             {0:~                  }|
         ]], float_pos=expected_pos}
@@ -4138,12 +4716,12 @@ describe('floating windows', function()
           screen:expect{grid=[[
           ## grid 1
             {9: }{10:2}{9:+ [No Name] }{3: [No Name] }{5:              }{9:X}|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            :tabnew                                 |
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [3:----------------------------------------]|
           ## grid 2 (hidden)
             x                                       |
             {0:~                                       }|
@@ -4151,10 +4729,12 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
             {0:~                                       }|
-          ## grid 3 (hidden)
+          ## grid 3
+            :tabnew                                 |
+          ## grid 4 (hidden)
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^                                        |
             {0:~                                       }|
             {0:~                                       }|
@@ -4183,7 +4763,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            :tabnext                                |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -4191,9 +4771,11 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            :tabnext                                |
+          ## grid 4
             {1:y                   }|
             {2:~                   }|
-          ## grid 4 (hidden)
+          ## grid 5 (hidden)
                                                     |
             {0:~                                       }|
             {0:~                                       }|
@@ -4217,22 +4799,24 @@ describe('floating windows', function()
           screen:expect{grid=[[
           ## grid 1
             {9: }{10:2}{9:+ [No Name] }{3: [No Name] }{5:              }{9:X}|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            :tabnext                                |
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [3:----------------------------------------]|
           ## grid 2 (hidden)
             x                                       |
             {0:~                                       }|
             {0:~                                       }|
             {0:~                                       }|
             {0:~                                       }|
-          ## grid 3 (hidden)
+          ## grid 3
+            :tabnext                                |
+          ## grid 4 (hidden)
             {1:y                   }|
             {2:~                   }|
-          ## grid 4
+          ## grid 5
             ^                                        |
             {0:~                                       }|
             {0:~                                       }|
@@ -4256,17 +4840,17 @@ describe('floating windows', function()
         if multigrid then
           -- also test external window wider than main screen
           meths.win_set_config(win, {external=true, width=65, height=4})
-          expected_pos = {[3]={external=true}}
+          expected_pos = {[4]={external=true}}
           feed(":tabnew<cr>")
           screen:expect{grid=[[
           ## grid 1
             {9: + [No Name] }{3: }{11:2}{3:+ [No Name] }{5:            }{9:X}|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            :tabnew                                 |
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [3:----------------------------------------]|
           ## grid 2 (hidden)
             x                                       |
             {0:~                                       }|
@@ -4275,11 +4859,13 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            :tabnew                                 |
+          ## grid 4
             y                                                                |
             {0:~                                                                }|
             {0:~                                                                }|
             {0:~                                                                }|
-          ## grid 4
+          ## grid 5
             ^                                        |
             {0:~                                       }|
             {0:~                                       }|
@@ -4287,8 +4873,8 @@ describe('floating windows', function()
             {0:~                                       }|
         ]], float_pos=expected_pos}
         else
-          eq({false, "UI doesn't support external windows"},
-             meth_pcall(meths.win_set_config, 0, {external=true, width=65, height=4}))
+          eq("UI doesn't support external windows",
+             pcall_err(meths.win_set_config, 0, {external=true, width=65, height=4}))
         end
 
         feed(":tabnext<cr>")
@@ -4301,7 +4887,7 @@ describe('floating windows', function()
             [2:----------------------------------------]|
             [2:----------------------------------------]|
             [2:----------------------------------------]|
-            :tabnext                                |
+            [3:----------------------------------------]|
           ## grid 2
             ^x                                       |
             {0:~                                       }|
@@ -4309,11 +4895,13 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            :tabnext                                |
+          ## grid 4
             y                                                                |
             {0:~                                                                }|
             {0:~                                                                }|
             {0:~                                                                }|
-          ## grid 4 (hidden)
+          ## grid 5 (hidden)
                                                     |
             {0:~                                       }|
             {0:~                                       }|
@@ -4327,12 +4915,12 @@ describe('floating windows', function()
           screen:expect{grid=[[
           ## grid 1
             {9: + [No Name] }{3: }{11:2}{3:+ [No Name] }{5:            }{9:X}|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            [4:----------------------------------------]|
-            :tabnext                                |
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [5:----------------------------------------]|
+            [3:----------------------------------------]|
           ## grid 2 (hidden)
             x                                       |
             {0:~                                       }|
@@ -4340,11 +4928,13 @@ describe('floating windows', function()
             {0:~                                       }|
             {0:~                                       }|
           ## grid 3
+            :tabnext                                |
+          ## grid 4
             y                                                                |
             {0:~                                                                }|
             {0:~                                                                }|
             {0:~                                                                }|
-          ## grid 4
+          ## grid 5
             ^                                        |
             {0:~                                       }|
             {0:~                                       }|
@@ -4397,7 +4987,7 @@ describe('floating windows', function()
           [2:--------------------------------------------------]|
           [2:--------------------------------------------------]|
           [2:--------------------------------------------------]|
-                                                            |
+          [3:--------------------------------------------------]|
         ## grid 2
           Ut enim ad minim veniam, quis nostrud             |
           exercitation ullamco laboris nisi ut aliquip ex   |
@@ -4407,11 +4997,13 @@ describe('floating windows', function()
           occaecat cupidatat non proident, sunt in culpa    |
           qui officia deserunt mollit anim id est           |
           laborum^.                                          |
-        ## grid 4
+        ## grid 3
+                                                            |
+        ## grid 5
           {1:test           }|
           {1:               }|
           {1:popup    text  }|
-        ]], float_pos={[4] = {{id = 1002}, "NW", 1, 2, 5, true}}}
+        ]], float_pos={[5] = {{id = 1002}, "NW", 1, 2, 5, true}}}
       else
         screen:expect([[
           Ut enim ad minim veniam, quis nostrud             |
@@ -4438,7 +5030,7 @@ describe('floating windows', function()
           [2:--------------------------------------------------]|
           [2:--------------------------------------------------]|
           [2:--------------------------------------------------]|
-                                                            |
+          [3:--------------------------------------------------]|
         ## grid 2
           Ut enim ad minim veniam, quis nostrud             |
           exercitation ullamco laboris nisi ut aliquip ex   |
@@ -4448,11 +5040,13 @@ describe('floating windows', function()
           occaecat cupidatat non proident, sunt in culpa    |
           qui officia deserunt mollit anim id est           |
           laborum^.                                          |
-        ## grid 4
+        ## grid 3
+                                                            |
+        ## grid 5
           {9:test           }|
           {9:               }|
           {9:popup    text  }|
-        ]], float_pos={[4] = {{id = 1002}, "NW", 1, 2, 5, true}}, unchanged=true}
+        ]], float_pos={[5] = {{id = 1002}, "NW", 1, 2, 5, true}}, unchanged=true}
       else
         screen:expect([[
           Ut enim ad minim veniam, quis nostrud             |
@@ -4480,7 +5074,7 @@ describe('floating windows', function()
           [2:--------------------------------------------------]|
           [2:--------------------------------------------------]|
           [2:--------------------------------------------------]|
-                                                            |
+          [3:--------------------------------------------------]|
         ## grid 2
           Ut enim ad minim veniam, quis nostrud             |
           exercitation ullamco laboris nisi ut aliquip ex   |
@@ -4490,11 +5084,13 @@ describe('floating windows', function()
           occaecat cupidatat non proident, sunt in culpa    |
           qui officia deserunt mollit anim id est           |
           laborum^.                                          |
-        ## grid 4
+        ## grid 3
+                                                            |
+        ## grid 5
           {9:test           }|
           {9:               }|
           {10:popup    text}{9:  }|
-        ]], float_pos={[4] = {{id = 1002}, "NW", 1, 2, 5, true}}}
+        ]], float_pos={[5] = {{id = 1002}, "NW", 1, 2, 5, true}}}
       else
         screen:expect([[
           Ut enim ad minim veniam, quis nostrud             |
@@ -4521,7 +5117,7 @@ describe('floating windows', function()
           [2:--------------------------------------------------]|
           [2:--------------------------------------------------]|
           [2:--------------------------------------------------]|
-                                                            |
+          [3:--------------------------------------------------]|
         ## grid 2
           Ut enim ad minim veniam, quis nostrud             |
           exercitation ullamco laboris nisi ut aliquip ex   |
@@ -4531,11 +5127,13 @@ describe('floating windows', function()
           occaecat cupidatat non proident, sunt in culpa    |
           qui officia deserunt mollit anim id est           |
           laborum^.                                          |
-        ## grid 4
+        ## grid 3
+                                                            |
+        ## grid 5
           {9:test           }|
           {9:               }|
           {11:popup    text}{9:  }|
-        ]], float_pos={[4] = {{id = 1002}, "NW", 1, 2, 5, true}}, unchanged=true}
+        ]], float_pos={[5] = {{id = 1002}, "NW", 1, 2, 5, true}}, unchanged=true}
       else
         screen:expect([[
           Ut enim ad minim veniam, quis nostrud             |
@@ -4552,7 +5150,7 @@ describe('floating windows', function()
 
       -- Test scrolling by mouse
       if multigrid then
-        meths.input_mouse('wheel', 'down', '', 4, 2, 2)
+        meths.input_mouse('wheel', 'down', '', 5, 2, 2)
         screen:expect{grid=[[
         ## grid 1
           [2:--------------------------------------------------]|
@@ -4563,7 +5161,7 @@ describe('floating windows', function()
           [2:--------------------------------------------------]|
           [2:--------------------------------------------------]|
           [2:--------------------------------------------------]|
-                                                            |
+          [3:--------------------------------------------------]|
         ## grid 2
           Ut enim ad minim veniam, quis nostrud             |
           exercitation ullamco laboris nisi ut aliquip ex   |
@@ -4573,11 +5171,13 @@ describe('floating windows', function()
           occaecat cupidatat non proident, sunt in culpa    |
           qui officia deserunt mollit anim id est           |
           laborum^.                                          |
-        ## grid 4
+        ## grid 3
+                                                            |
+        ## grid 5
           {11:popup    text}{9:  }|
           {12:~              }|
           {12:~              }|
-        ]], float_pos={[4] = {{id = 1002}, "NW", 1, 2, 5, true}}}
+        ]], float_pos={[5] = {{id = 1002}, "NW", 1, 2, 5, true}}}
       else
         meths.input_mouse('wheel', 'down', '', 0, 4, 7)
         screen:expect([[
@@ -4609,7 +5209,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           # TODO: 测试字典信息的准确性            |
           # FIXME: 测试字典信息的准确^性           |
@@ -4618,10 +5218,12 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
         ## grid 3
+                                                  |
+        ## grid 4
           {1:     }|
           {1:     }|
           {1:     }|
-        ]], float_pos={ [3] = { { id = 1001 }, "NW", 1, 0, 11, true } }}
+        ]], float_pos={ [4] = { { id = 1001 }, "NW", 1, 0, 11, true } }}
       else
         screen:expect([[
           # TODO: 测 {1:     }信息的准确性            |
@@ -4644,7 +5246,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           # TODO: 测试字典信息的准确性            |
           # FIXME: 测试字典信息的准确^性           |
@@ -4652,6 +5254,8 @@ describe('floating windows', function()
           {0:~                                       }|
           {0:~                                       }|
           {0:~                                       }|
+        ## grid 3
+                                                  |
         ]])
       else
         screen:expect([[
@@ -4687,7 +5291,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           # TODO: 测试字典信息的准确性            |
           # FIXME: 测试字典信息的准确^性           |
@@ -4695,12 +5299,14 @@ describe('floating windows', function()
           {3:~                                       }|
           {3:~                                       }|
           {3:~                                       }|
-        ## grid 5
+        ## grid 3
+                                                  |
+        ## grid 6
           {5: x x  x   xx}|
           {5:  x x  x   x}|
           {5:            }|
         ]], float_pos={
-          [5] = { {
+          [6] = { {
               id = 1003
             }, "NW", 1, 0, 11, true }
         }}
@@ -4726,7 +5332,7 @@ describe('floating windows', function()
           [2:----------------------------------------]|
           [2:----------------------------------------]|
           [2:----------------------------------------]|
-                                                  |
+          [3:----------------------------------------]|
         ## grid 2
           # TODO: 测试字典信息的准确性            |
           # FIXME: 测试字典信息的准确^性           |
@@ -4734,12 +5340,14 @@ describe('floating windows', function()
           {3:~                                       }|
           {3:~                                       }|
           {3:~                                       }|
-        ## grid 5
+        ## grid 3
+                                                  |
+        ## grid 6
           {5: x x  x   xx}|
           {5:  x x  x   x}|
           {5:            }|
         ]], float_pos={
-          [5] = { {
+          [6] = { {
               id = 1003
             }, "NW", 1, 0, 12, true }
         }}

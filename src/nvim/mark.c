@@ -20,6 +20,7 @@
 #include "nvim/ex_cmds.h"
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
+#include "nvim/extmark.h"
 #include "nvim/mbyte.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
@@ -178,6 +179,16 @@ void setpcmark(void)
     curwin->w_pcmark.lnum = 1;
   }
 
+  if (jop_flags & JOP_STACK) {
+    // jumpoptions=stack: if we're somewhere in the middle of the jumplist
+    // discard everything after the current index.
+    if (curwin->w_jumplistidx < curwin->w_jumplistlen - 1) {
+      // Discard the rest of the jumplist by cutting the length down to
+      // contain nothing beyond the current index.
+      curwin->w_jumplistlen = curwin->w_jumplistidx + 1;
+    }
+  }
+
   /* If jumplist is full: remove oldest entry */
   if (++curwin->w_jumplistlen > JUMPLISTSIZE) {
     curwin->w_jumplistlen = JUMPLISTSIZE;
@@ -296,17 +307,17 @@ pos_T *movechangelist(int count)
  * - NULL if there is no mark called 'c'.
  * - -1 if mark is in other file and jumped there (only if changefile is TRUE)
  */
-pos_T *getmark_buf(buf_T *buf, int c, int changefile)
+pos_T *getmark_buf(buf_T *buf, int c, bool changefile)
 {
   return getmark_buf_fnum(buf, c, changefile, NULL);
 }
 
-pos_T *getmark(int c, int changefile)
+pos_T *getmark(int c, bool changefile)
 {
   return getmark_buf_fnum(curbuf, c, changefile, NULL);
 }
 
-pos_T *getmark_buf_fnum(buf_T *buf, int c, int changefile, int *fnum)
+pos_T *getmark_buf_fnum(buf_T *buf, int c, bool changefile, int *fnum)
 {
   pos_T               *posp;
   pos_T               *startp, *endp;
@@ -616,7 +627,7 @@ static char_u *mark_line(pos_T *mp, int lead_len)
 /*
  * print the marks
  */
-void do_marks(exarg_T *eap)
+void ex_marks(exarg_T *eap)
 {
   char_u      *arg = eap->arg;
   int i;
@@ -905,9 +916,9 @@ void mark_adjust(linenr_T line1,
                  linenr_T line2,
                  long amount,
                  long amount_after,
-                 bool end_temp)
+                 ExtmarkOp op)
 {
-  mark_adjust_internal(line1, line2, amount, amount_after, true, end_temp);
+  mark_adjust_internal(line1, line2, amount, amount_after, true, op);
 }
 
 // mark_adjust_nofold() does the same as mark_adjust() but without adjusting
@@ -916,14 +927,16 @@ void mark_adjust(linenr_T line1,
 // calling foldMarkAdjust() with arguments line1, line2, amount, amount_after,
 // for an example of why this may be necessary, see do_move().
 void mark_adjust_nofold(linenr_T line1, linenr_T line2, long amount,
-                        long amount_after, bool end_temp)
+                        long amount_after,
+                        ExtmarkOp op)
 {
-  mark_adjust_internal(line1, line2, amount, amount_after, false, end_temp);
+  mark_adjust_internal(line1, line2, amount, amount_after, false, op);
 }
 
 static void mark_adjust_internal(linenr_T line1, linenr_T line2,
                                  long amount, long amount_after,
-                                 bool adjust_folds, bool end_temp)
+                                 bool adjust_folds,
+                                 ExtmarkOp op)
 {
   int i;
   int fnum = curbuf->b_fnum;
@@ -978,7 +991,9 @@ static void mark_adjust_internal(linenr_T line1, linenr_T line2,
     }
 
     sign_mark_adjust(line1, line2, amount, amount_after);
-    bufhl_mark_adjust(curbuf, line1, line2, amount, amount_after, end_temp);
+    if (op != kExtmarkNOOP) {
+      extmark_adjust(curbuf, line1, line2, amount, amount_after, op);
+    }
   }
 
   /* previous context mark */
@@ -1162,21 +1177,18 @@ void mark_col_adjust(
 
 // When deleting lines, this may create duplicate marks in the
 // jumplist. They will be removed here for the specified window.
-// When "loadfiles" is true first ensure entries have the "fnum" field set
-// (this may be a bit slow).
-void cleanup_jumplist(win_T *wp, bool loadfiles)
+// When "checktail" is true, removes tail jump if it matches current position.
+void cleanup_jumplist(win_T *wp, bool checktail)
 {
   int i;
 
-  if (loadfiles) {
-    // If specified, load all the files from the jump list. This is
-    // needed to properly clean up duplicate entries, but will take some
-    // time.
-    for (i = 0; i < wp->w_jumplistlen; i++) {
-      if ((wp->w_jumplist[i].fmark.fnum == 0)
-          && (wp->w_jumplist[i].fmark.mark.lnum != 0)) {
-        fname2fnum(&wp->w_jumplist[i]);
-      }
+  // Load all the files from the jump list. This is
+  // needed to properly clean up duplicate entries, but will take some
+  // time.
+  for (i = 0; i < wp->w_jumplistlen; i++) {
+    if ((wp->w_jumplist[i].fmark.fnum == 0)
+        && (wp->w_jumplist[i].fmark.mark.lnum != 0)) {
+      fname2fnum(&wp->w_jumplist[i]);
     }
   }
 
@@ -1194,7 +1206,20 @@ void cleanup_jumplist(win_T *wp, bool loadfiles)
         break;
       }
     }
-    if (i >= wp->w_jumplistlen) {  // no duplicate
+
+    bool mustfree;
+    if (i >= wp->w_jumplistlen) {   // not duplicate
+      mustfree = false;
+    } else if (i > from + 1) {      // non-adjacent duplicate
+      // jumpoptions=stack: remove duplicates only when adjacent.
+      mustfree = !(jop_flags & JOP_STACK);
+    } else {                        // adjacent duplicate
+      mustfree = true;
+    }
+
+    if (mustfree) {
+      xfree(wp->w_jumplist[from].fname);
+    } else {
       if (to != from) {
         // Not using wp->w_jumplist[to++] = wp->w_jumplist[from] because
         // this way valgrind complains about overlapping source and destination
@@ -1202,8 +1227,6 @@ void cleanup_jumplist(win_T *wp, bool loadfiles)
         wp->w_jumplist[to] = wp->w_jumplist[from];
       }
       to++;
-    } else {
-      xfree(wp->w_jumplist[from].fname);
     }
   }
   if (wp->w_jumplistidx == wp->w_jumplistlen) {
@@ -1213,8 +1236,8 @@ void cleanup_jumplist(win_T *wp, bool loadfiles)
 
   // When pointer is below last jump, remove the jump if it matches the current
   // line.  This avoids useless/phantom jumps. #9805
-  if (loadfiles  // otherwise (i.e.: Shada), last entry should be kept
-      && wp->w_jumplistlen && wp->w_jumplistidx == wp->w_jumplistlen) {
+  if (checktail && wp->w_jumplistlen
+      && wp->w_jumplistidx == wp->w_jumplistlen) {
     const xfmark_T *fm_last = &wp->w_jumplist[wp->w_jumplistlen - 1];
     if (fm_last->fmark.fnum == curbuf->b_fnum
         && fm_last->fmark.mark.lnum == wp->w_cursor.lnum) {
