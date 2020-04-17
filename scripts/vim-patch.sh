@@ -234,7 +234,8 @@ get_vimpatch() {
   msg_ok "Saved patch to '${NVIM_SOURCE_DIR}/${patch_file}'."
 }
 
-# shellcheck disable=SC2015  # "Note that A && B || C is not if-then-else."
+# shellcheck disable=SC2015
+# ^ "Note that A && B || C is not if-then-else."
 stage_patch() {
   get_vimpatch "$1"
   local try_apply="${2:-}"
@@ -305,7 +306,8 @@ git_hub_pr() {
   git hub pull new -m "$1"
 }
 
-# shellcheck disable=SC2015  # "Note that A && B || C is not if-then-else."
+# shellcheck disable=SC2015
+# ^ "Note that A && B || C is not if-then-else."
 submit_pr() {
   require_executable git
   local push_first
@@ -668,9 +670,11 @@ review_pr() {
   echo
   echo "Downloading data for pull request #${pr}."
 
-  local pr_commit_urls=(
-    "$(curl -Ssf "https://api.github.com/repos/neovim/neovim/pulls/${pr}/commits" \
-      | jq -r '.[].html_url')")
+  local -a pr_commit_urls
+  while IFS= read -r pr_commit_url; do
+    pr_commit_urls+=("$pr_commit_url")
+  done < <(curl -Ssf "https://api.github.com/repos/neovim/neovim/pulls/${pr}/commits" \
+    | jq -r '.[].html_url')
 
   echo "Found ${#pr_commit_urls[@]} commit(s)."
 

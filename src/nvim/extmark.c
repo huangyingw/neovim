@@ -86,7 +86,7 @@ uint64_t extmark_set(buf_T *buf, uint64_t ns_id, uint64_t id,
         extmark_del(buf, ns_id, id);
       } else {
         // TODO(bfredl): we need to do more if "revising" a decoration mark.
-        MarkTreeIter itr[1];
+        MarkTreeIter itr[1] = { 0 };
         old_pos = marktree_lookup(buf->b_marktree, old_mark, itr);
         assert(itr->node);
         if (old_pos.row == row && old_pos.col == col) {
@@ -119,7 +119,7 @@ revised:
 
 static bool extmark_setraw(buf_T *buf, uint64_t mark, int row, colnr_T col)
 {
-  MarkTreeIter itr[1];
+  MarkTreeIter itr[1] = { 0 };
   mtpos_t pos = marktree_lookup(buf->b_marktree, mark, itr);
   if (pos.row == -1) {
     return false;
@@ -147,7 +147,7 @@ bool extmark_del(buf_T *buf, uint64_t ns_id, uint64_t id)
     return false;
   }
 
-  MarkTreeIter itr[1];
+  MarkTreeIter itr[1] = { 0 };
   mtpos_t pos = marktree_lookup(buf->b_marktree, mark, itr);
   assert(pos.row >= 0);
   marktree_del_itr(buf->b_marktree, itr, false);
@@ -207,7 +207,7 @@ bool extmark_clear(buf_T *buf, uint64_t ns_id,
     delete_set = map_new(uint64_t, uint64_t)();
   }
 
-  MarkTreeIter itr[1];
+  MarkTreeIter itr[1] = { 0 };
   marktree_itr_get(buf->b_marktree, l_row, l_col, itr);
   while (true) {
     mtmark_t mark = marktree_itr_current(itr);
@@ -276,7 +276,7 @@ ExtmarkArray extmark_get(buf_T *buf, uint64_t ns_id,
                          int64_t amount, bool reverse)
 {
   ExtmarkArray array = KV_INITIAL_VALUE;
-  MarkTreeIter itr[1];
+  MarkTreeIter itr[1] = { 0 };
   // Find all the marks
   marktree_itr_get_ext(buf->b_marktree, (mtpos_t){ l_row, l_col },
                        itr, reverse, false, NULL);
@@ -396,7 +396,7 @@ void u_extmark_copy(buf_T *buf,
 
   ExtmarkUndoObject undo;
 
-  MarkTreeIter itr[1];
+  MarkTreeIter itr[1] = { 0 };
   marktree_itr_get(buf->b_marktree, l_row, l_col, itr);
   while (true) {
     mtmark_t mark = marktree_itr_current(itr);
@@ -699,21 +699,30 @@ void bufhl_add_hl_pos_offset(buf_T *buf,
 
   // TODO(bfredl): if decoration had blocky mode, we could avoid this loop
   for (linenr_T lnum = pos_start.lnum; lnum <= pos_end.lnum; lnum ++) {
+    int end_off = 0;
     if (pos_start.lnum < lnum && lnum < pos_end.lnum) {
-      hl_start = offset-1;
-      hl_end = MAXCOL;
+      // TODO(bfredl): This is quite ad-hoc, but the space between |num| and
+      // text being highlighted is the indication of \n being part of the
+      // substituted text. But it would be more consistent to highlight
+      // a space _after_ the previous line instead (like highlight EOL list
+      // char)
+      hl_start = MAX(offset-1, 0);
+      end_off = 1;
+      hl_end = 0;
     } else if (lnum == pos_start.lnum && lnum < pos_end.lnum) {
       hl_start = pos_start.col + offset;
-      hl_end = MAXCOL;
+      end_off = 1;
+      hl_end = 0;
     } else if (pos_start.lnum < lnum && lnum == pos_end.lnum) {
-      hl_start = offset-1;
+      hl_start = MAX(offset-1, 0);
       hl_end = pos_end.col + offset;
     } else if (pos_start.lnum == lnum && pos_end.lnum == lnum) {
       hl_start = pos_start.col + offset;
       hl_end = pos_end.col + offset;
     }
     (void)extmark_add_decoration(buf, (uint64_t)src_id, hl_id,
-                                 (int)lnum-1, hl_start, (int)lnum-1, hl_end,
+                                 (int)lnum-1, hl_start,
+                                 (int)lnum-1+end_off, hl_end,
                                  VIRTTEXT_EMPTY);
   }
 }
@@ -729,7 +738,7 @@ void clear_virttext(VirtText *text)
 
 VirtText *extmark_find_virttext(buf_T *buf, int row, uint64_t ns_id)
 {
-  MarkTreeIter itr[1];
+  MarkTreeIter itr[1] = { 0 };
   marktree_itr_get(buf->b_marktree, row, 0,  itr);
   while (true) {
     mtmark_t mark = marktree_itr_current(itr);
@@ -747,17 +756,17 @@ VirtText *extmark_find_virttext(buf_T *buf, int row, uint64_t ns_id)
   return NULL;
 }
 
-
-bool extmark_decorations_reset(buf_T *buf, DecorationState *state)
+bool decorations_redraw_reset(buf_T *buf, DecorationRedrawState *state)
 {
   state->row = -1;
-  return buf->b_extmark_index;
+  kv_size(state->active) = 0;
+  return buf->b_extmark_index || buf->b_luahl;
 }
 
 
-bool extmark_decorations_start(buf_T *buf, int top_row, DecorationState *state)
+bool decorations_redraw_start(buf_T *buf, int top_row,
+                              DecorationRedrawState *state)
 {
-  kv_size(state->active) = 0;
   state->top_row = top_row;
   marktree_itr_get(buf->b_marktree, top_row, 0, state->itr);
   if (!state->itr->node) {
@@ -780,7 +789,7 @@ bool extmark_decorations_start(buf_T *buf, int top_row, DecorationState *state)
     ExtmarkItem *item = map_ref(uint64_t, ExtmarkItem)(buf->b_extmark_index,
                                                        start_id, false);
     if ((!(mark.id&MARKTREE_END_FLAG) && altpos.row < top_row
-         && !kv_size(item->virt_text))
+         && item && !kv_size(item->virt_text))
         || ((mark.id&MARKTREE_END_FLAG) && altpos.row >= top_row)) {
       goto next_mark;
     }
@@ -808,17 +817,17 @@ next_mark:
   return true;  // TODO(bfredl): check if available in the region
 }
 
-bool extmark_decorations_line(buf_T *buf, int row, DecorationState *state)
+bool decorations_redraw_line(buf_T *buf, int row, DecorationRedrawState *state)
 {
   if (state->row == -1) {
-    extmark_decorations_start(buf, row, state);
+    decorations_redraw_start(buf, row, state);
   }
   state->row = row;
   state->col_until = -1;
   return true;  // TODO(bfredl): be more precise
 }
 
-int extmark_decorations_col(buf_T *buf, int col, DecorationState *state)
+int decorations_redraw_col(buf_T *buf, int col, DecorationRedrawState *state)
 {
   if (col <= state->col_until) {
     return state->current;
@@ -845,7 +854,7 @@ int extmark_decorations_col(buf_T *buf, int col, DecorationState *state)
 
     if (endpos.row < mark.row
         || (endpos.row == mark.row && endpos.col <= mark.col)) {
-      if (!kv_size(item->virt_text)) {
+      if (item && !kv_size(item->virt_text)) {
         goto next_mark;
       }
     }
@@ -897,9 +906,9 @@ next_mark:
   return attr;
 }
 
-VirtText *extmark_decorations_virt_text(buf_T *buf, DecorationState *state)
+VirtText *decorations_redraw_virt_text(buf_T *buf, DecorationRedrawState *state)
 {
-  extmark_decorations_col(buf, MAXCOL, state);
+  decorations_redraw_col(buf, MAXCOL, state);
   for (size_t i = 0; i < kv_size(state->active); i++) {
     HlRange item = kv_A(state->active, i);
     if (item.start_row == state->row && item.virt_text) {

@@ -577,8 +577,8 @@ static char *(p_ssop_values[]) = {
 # define SSOP_HELP              0x040
 # define SSOP_BLANK             0x080
 # define SSOP_GLOBALS           0x100
-# define SSOP_SLASH             0x200
-# define SSOP_UNIX              0x400
+# define SSOP_SLASH             0x200  // Deprecated, always set.
+# define SSOP_UNIX              0x400  // Deprecated, always set.
 # define SSOP_SESDIR            0x800
 # define SSOP_CURDIR            0x1000
 # define SSOP_FOLDS             0x2000
@@ -835,6 +835,8 @@ enum {
   , WV_RLC
   , WV_SCBIND
   , WV_SCROLL
+  , WV_SISO
+  , WV_SO
   , WV_SPELL
   , WV_CUC
   , WV_CUL

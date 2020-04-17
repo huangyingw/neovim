@@ -15,9 +15,9 @@ local check_cores = global_helpers.check_cores
 local check_logs = global_helpers.check_logs
 local dedent = global_helpers.dedent
 local eq = global_helpers.eq
-local filter = global_helpers.filter
+local filter = global_helpers.tbl_filter
 local is_os = global_helpers.is_os
-local map = global_helpers.map
+local map = global_helpers.tbl_map
 local ok = global_helpers.ok
 local sleep = global_helpers.sleep
 local tbl_contains = global_helpers.tbl_contains
@@ -794,7 +794,7 @@ function module.alter_slashes(obj)
     end
     return ret
   else
-    assert(false, 'Could only alter slashes for tables of strings and strings')
+    assert(false, 'expected string or table of strings, got '..type(obj))
   end
 end
 

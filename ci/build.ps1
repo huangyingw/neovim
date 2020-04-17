@@ -36,8 +36,7 @@ $scoop = (New-Object System.Net.WebClient).DownloadString('https://get.scoop.sh'
   Invoke-Expression $scoop
 }
 
-scoop install diffutils perl
-diff3 --version
+scoop install perl
 perl --version
 cpanm.bat --version
 
@@ -81,7 +80,7 @@ if ($compiler -eq 'MINGW') {
   # in MSYS2, but we cannot build inside the MSYS2 shell.
   $cmakeGenerator = 'Ninja'
   $cmakeGeneratorArgs = '-v'
-  $mingwPackages = @('ninja', 'cmake').ForEach({
+  $mingwPackages = @('ninja', 'cmake', 'diffutils').ForEach({
     "mingw-w64-$arch-$_"
   })
 
@@ -123,22 +122,6 @@ if (-not $NoTests) {
   npm.cmd install -g neovim
   Get-Command -CommandType Application neovim-node-host.cmd
   npm.cmd link neovim
-
-
-  $env:TREE_SITTER_DIR = $env:USERPROFILE + "\tree-sitter-build"
-  mkdir "$env:TREE_SITTER_DIR\bin"
-
-  $xbits = if ($bits -eq '32') {'x86'} else {'x64'}
-  Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/tree-sitter/tree-sitter/releases/download/0.15.9/tree-sitter-windows-$xbits.gz" -OutFile tree-sitter.exe.gz
-  C:\msys64\usr\bin\gzip -d tree-sitter.exe.gz
-
-  Invoke-WebRequest -UseBasicParsing -Uri "https://codeload.github.com/tree-sitter/tree-sitter-c/zip/v0.15.2" -OutFile tree_sitter_c.zip
-  Expand-Archive .\tree_sitter_c.zip -DestinationPath .
-  cd tree-sitter-c-0.15.2
-  ..\tree-sitter.exe test
-  if (-Not (Test-Path -PathType Leaf "$env:TREE_SITTER_DIR\bin\c.dll")) {
-    exit 1
-  }
 }
 
 if ($compiler -eq 'MSVC') {
@@ -173,6 +156,9 @@ if (-not $NoTests) {
   # Functional tests
   # The $LastExitCode from MSBuild can't be trusted
   $failed = $false
+
+  # Run only this test file:
+  # $env:TEST_FILE = "test\functional\foo.lua"
   cmake --build . --config $cmakeBuildType --target functionaltest -- $cmakeGeneratorArgs 2>&1 |
     foreach { $failed = $failed -or
       $_ -match 'functional tests failed with error'; $_ }

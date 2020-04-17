@@ -848,7 +848,7 @@ static void find_word(matchinf_T *mip, int mode)
         mip->mi_compflags[mip->mi_complen] = ((unsigned)flags >> 24);
         mip->mi_compflags[mip->mi_complen + 1] = NUL;
         if (word_ends) {
-          char_u fword[MAXWLEN];
+          char_u fword[MAXWLEN] = { 0 };
 
           if (slang->sl_compsylmax < MAXWLEN) {
             // "fword" is only needed for checking syllables.
@@ -1026,26 +1026,25 @@ match_checkcompoundpattern (
 
 // Returns true if "flags" is a valid sequence of compound flags and "word"
 // does not have too many syllables.
-static bool can_compound(slang_T *slang, char_u *word, char_u *flags)
+static bool can_compound(slang_T *slang, const char_u *word,
+                         const char_u *flags)
+  FUNC_ATTR_NONNULL_ALL
 {
-  char_u uflags[MAXWLEN * 2];
-  int i;
-  char_u      *p;
+  char_u uflags[MAXWLEN * 2] = { 0 };
 
-  if (slang->sl_compprog == NULL)
+  if (slang->sl_compprog == NULL) {
     return false;
-  if (enc_utf8) {
-    // Need to convert the single byte flags to utf8 characters.
-    p = uflags;
-    for (i = 0; flags[i] != NUL; i++) {
-      p += utf_char2bytes(flags[i], p);
-    }
-    *p = NUL;
-    p = uflags;
-  } else
-    p = flags;
-  if (!vim_regexec_prog(&slang->sl_compprog, false, p, 0))
+  }
+  // Need to convert the single byte flags to utf8 characters.
+  char_u *p = uflags;
+  for (int i = 0; flags[i] != NUL; i++) {
+    p += utf_char2bytes(flags[i], p);
+  }
+  *p = NUL;
+  p = uflags;
+  if (!vim_regexec_prog(&slang->sl_compprog, false, p, 0)) {
     return false;
+  }
 
   // Count the number of syllables.  This may be slow, do it last.  If there
   // are too many syllables AND the number of compound words is above
@@ -2008,6 +2007,10 @@ char_u *did_set_spelllang(win_T *wp)
     region = NULL;
     len = (int)STRLEN(lang);
 
+    if (!valid_spellang(lang)) {
+      continue;
+    }
+
     if (STRCMP(lang, "cjk") == 0) {
       wp->w_s->b_cjk = 1;
       continue;
@@ -2824,9 +2827,6 @@ void spell_suggest(int count)
       smsg(_("Sorry, only %" PRId64 " suggestions"),
            (int64_t)sug.su_ga.ga_len);
   } else {
-    XFREE_CLEAR(repl_from);
-    XFREE_CLEAR(repl_to);
-
     // When 'rightleft' is set the list is drawn right-left.
     cmdmsg_rl = curwin->w_p_rl;
     if (cmdmsg_rl)
@@ -2906,6 +2906,9 @@ void spell_suggest(int count)
 
   if (selected > 0 && selected <= sug.su_ga.ga_len && u_save_cursor() == OK) {
     // Save the from and to text for :spellrepall.
+    XFREE_CLEAR(repl_from);
+    XFREE_CLEAR(repl_to);
+
     stp = &SUG(sug.su_ga, selected - 1);
     if (sug.su_badlen > stp->st_orglen) {
       // Replacing less than "su_badlen", append the remainder to
@@ -3603,7 +3606,7 @@ static void suggest_trie_walk(suginfo_T *su, langp_T *lp, char_u *fword, bool so
 {
   char_u tword[MAXWLEN];            // good word collected so far
   trystate_T stack[MAXWLEN];
-  char_u preword[MAXWLEN * 3];      // word found with proper case;
+  char_u preword[MAXWLEN * 3] = { 0 };  // word found with proper case;
                                     // concatenation of prefix compound
                                     // words and split word.  NUL terminated
                                     // when going deeper but not when coming
@@ -4268,9 +4271,8 @@ static void suggest_trie_walk(suginfo_T *su, langp_T *lp, char_u *fword, bool so
                 // For changing a composing character adjust
                 // the score from SCORE_SUBST to
                 // SCORE_SUBCOMP.
-                if (enc_utf8
-                    && utf_iscomposing(utf_ptr2char(tword + sp->ts_twordlen
-                                                    - sp->ts_tcharlen))
+                if (utf_iscomposing(utf_ptr2char(tword + sp->ts_twordlen
+                                                 - sp->ts_tcharlen))
                     && utf_iscomposing(utf_ptr2char(fword
                                                     + sp->ts_fcharstart))) {
                   sp->ts_score -= SCORE_SUBST - SCORE_SUBCOMP;
@@ -5759,19 +5761,22 @@ cleanup_suggestions (
     int maxscore,
     int keep                       // nr of suggestions to keep
 )
+  FUNC_ATTR_NONNULL_ALL
 {
   suggest_T   *stp = &SUG(*gap, 0);
 
-  // Sort the list.
-  qsort(gap->ga_data, (size_t)gap->ga_len, sizeof(suggest_T), sug_compare);
+  if (gap->ga_len > 0) {
+    // Sort the list.
+    qsort(gap->ga_data, (size_t)gap->ga_len, sizeof(suggest_T), sug_compare);
 
-  // Truncate the list to the number of suggestions that will be displayed.
-  if (gap->ga_len > keep) {
-    for (int i = keep; i < gap->ga_len; ++i) {
-      xfree(stp[i].st_word);
+    // Truncate the list to the number of suggestions that will be displayed.
+    if (gap->ga_len > keep) {
+      for (int i = keep; i < gap->ga_len; i++) {
+        xfree(stp[i].st_word);
+      }
+      gap->ga_len = keep;
+      return stp[keep - 1].st_score;
     }
-    gap->ga_len = keep;
-    return stp[keep - 1].st_score;
   }
   return maxscore;
 }
@@ -5855,7 +5860,7 @@ static void spell_soundfold_sofo(slang_T *slang, char_u *inword, char_u *res)
     // 255, sl_sal the rest.
     for (s = inword; *s != NUL; ) {
       c = mb_cptr2char_adv((const char_u **)&s);
-      if (enc_utf8 ? utf_class(c) == 0 : ascii_iswhite(c)) {
+      if (utf_class(c) == 0) {
         c = ' ';
       } else if (c < 256) {
         c = slang->sl_sal_first[c];
@@ -5932,9 +5937,10 @@ static void spell_soundfold_wsal(slang_T *slang, char_u *inword, char_u *res)
     const char_u *t = s;
     c = mb_cptr2char_adv((const char_u **)&s);
     if (slang->sl_rem_accents) {
-      if (enc_utf8 ? utf_class(c) == 0 : ascii_iswhite(c)) {
-        if (did_white)
+      if (utf_class(c) == 0) {
+        if (did_white) {
           continue;
+        }
         c = ' ';
         did_white = true;
       } else {

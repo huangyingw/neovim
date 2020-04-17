@@ -66,6 +66,7 @@
 #include "nvim/path.h"
 #include "nvim/popupmnu.h"
 #include "nvim/regexp.h"
+#include "nvim/ex_session.h"
 #include "nvim/screen.h"
 #include "nvim/spell.h"
 #include "nvim/spellfile.h"
@@ -298,7 +299,8 @@ static char *(p_scbopt_values[]) =    { "ver", "hor", "jump", NULL };
 static char *(p_debug_values[]) =     { "msg", "throw", "beep", NULL };
 static char *(p_ead_values[]) =       { "both", "ver", "hor", NULL };
 static char *(p_buftype_values[]) =   { "nofile", "nowrite", "quickfix",
-                                        "help", "acwrite", "terminal", NULL };
+                                        "help", "acwrite", "terminal",
+                                        "prompt", NULL };
 
 static char *(p_bufhidden_values[]) = { "hide", "unload", "delete",
                                         "wipe", NULL };
@@ -313,6 +315,9 @@ static char *(p_scl_values[]) =       { "yes", "no", "auto", "auto:1", "auto:2",
   "auto:3", "auto:4", "auto:5", "auto:6", "auto:7", "auto:8", "auto:9",
   "yes:1", "yes:2", "yes:3", "yes:4", "yes:5", "yes:6", "yes:7", "yes:8",
   "yes:9", NULL };
+static char *(p_fdc_values[]) =       { "auto:1", "auto:2",
+  "auto:3", "auto:4", "auto:5", "auto:6", "auto:7", "auto:8", "auto:9",
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", NULL };
 
 /// All possible flags for 'shm'.
 static char_u SHM_ALL[] = {
@@ -497,6 +502,24 @@ static inline char *add_dir(char *dest, const char *const dir,
   return dest;
 }
 
+char *get_lib_dir(void)
+{
+  // TODO(bfredl): too fragile? Ideally default_lib_dir would be made empty
+  // in an appimage build
+  if (strlen(default_lib_dir) != 0
+      && os_isdir((const char_u *)default_lib_dir)) {
+    return xstrdup(default_lib_dir);
+  }
+
+  // Find library path relative to the nvim binary: ../lib/nvim/
+  char exe_name[MAXPATHL];
+  vim_get_prefix_from_exepath(exe_name);
+  if (append_path(exe_name, "lib" _PATHSEPSTR "nvim", MAXPATHL) == OK) {
+    return xstrdup(exe_name);
+  }
+  return NULL;
+}
+
 /// Sets &runtimepath to default value.
 ///
 /// Windows: Uses "…/nvim-data" for kXDGDataHome to avoid storing
@@ -507,6 +530,7 @@ static void set_runtimepath_default(void)
   char *const data_home = stdpaths_get_xdg_var(kXDGDataHome);
   char *const config_home = stdpaths_get_xdg_var(kXDGConfigHome);
   char *const vimruntime = vim_getenv("VIMRUNTIME");
+  char *const libdir = get_lib_dir();
   char *const data_dirs = stdpaths_get_xdg_var(kXDGDataDirs);
   char *const config_dirs = stdpaths_get_xdg_var(kXDGConfigDirs);
 #define SITE_SIZE (sizeof("site") - 1)
@@ -514,6 +538,7 @@ static void set_runtimepath_default(void)
   size_t data_len = 0;
   size_t config_len = 0;
   size_t vimruntime_len = 0;
+  size_t libdir_len = 0;
   if (data_home != NULL) {
     data_len = strlen(data_home);
     if (data_len != 0) {
@@ -543,6 +568,12 @@ static void set_runtimepath_default(void)
       rtp_size += vimruntime_len + memcnt(vimruntime, ',', vimruntime_len) + 1;
     }
   }
+  if (libdir != NULL) {
+    libdir_len = strlen(libdir);
+    if (libdir_len != 0) {
+      rtp_size += libdir_len + memcnt(libdir, ',', libdir_len) + 1;
+    }
+  }
   rtp_size += compute_double_colon_len(data_dirs, NVIM_SIZE + 1 + SITE_SIZE + 1,
                                        AFTER_SIZE + 1);
   rtp_size += compute_double_colon_len(config_dirs, NVIM_SIZE + 1,
@@ -561,6 +592,7 @@ static void set_runtimepath_default(void)
                            true);
   rtp_cur = add_dir(rtp_cur, vimruntime, vimruntime_len, kXDGNone,
                     NULL, 0, NULL, 0);
+  rtp_cur = add_dir(rtp_cur, libdir, libdir_len, kXDGNone, NULL, 0, NULL, 0);
   rtp_cur = add_colon_dirs(rtp_cur, data_dirs, "site", SITE_SIZE,
                            "after", AFTER_SIZE, false);
   rtp_cur = add_dir(rtp_cur, data_home, data_len, kXDGDataHome,
@@ -582,6 +614,7 @@ static void set_runtimepath_default(void)
   xfree(data_home);
   xfree(config_home);
   xfree(vimruntime);
+  xfree(libdir);
 }
 
 #undef NVIM_SIZE
@@ -871,11 +904,19 @@ set_option_default(
       if (options[opt_idx].indir == PV_SCROLL) {
         win_comp_scroll(curwin);
       } else {
-        *(long *)varp = (long)(intptr_t)options[opt_idx].def_val[dvi];
+        long def_val = (long)options[opt_idx].def_val[dvi];
+        if ((long *)varp == &curwin->w_p_so
+            || (long *)varp == &curwin->w_p_siso) {
+          // 'scrolloff' and 'sidescrolloff' local values have a
+          // different default value than the global default.
+          *(long *)varp = -1;
+        } else {
+          *(long *)varp = def_val;
+        }
         // May also set global value for local option.
         if (both) {
           *(long *)get_varp_scope(&(options[opt_idx]), OPT_GLOBAL) =
-            *(long *)varp;
+            def_val;
         }
       }
     } else {  // P_BOOL
@@ -2509,12 +2550,41 @@ static char *set_string_option(const int opt_idx, const char *const value,
   return r;
 }
 
+/// Return true if "val" is a valid name: only consists of alphanumeric ASCII
+/// characters or characters in "allowed".
+static bool valid_name(const char_u *val, const char *allowed)
+  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
+{
+  for (const char_u *s = val; *s != NUL; s++) {
+    if (!ASCII_ISALNUM(*s)
+        && vim_strchr((const char_u *)allowed, *s) == NULL) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /// Return true if "val" is a valid 'filetype' name.
 /// Also used for 'syntax' and 'keymap'.
-static bool valid_filetype(char_u *val)
+static bool valid_filetype(const char_u *val)
+  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
-  for (char_u *s = val; *s != NUL; s++) {
-    if (!ASCII_ISALNUM(*s) && vim_strchr((char_u *)".-_", *s) == NULL) {
+  return valid_name(val, ".-_");
+}
+
+/// Return true if "val" is a valid 'spellang' value.
+bool valid_spellang(const char_u *val)
+  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
+{
+  return valid_name(val, ".-_,@");
+}
+
+/// Return true if "val" is a valid 'spellfile' value.
+static bool valid_spellfile(const char_u *val)
+  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
+{
+  for (const char_u *s = val; *s != NUL; s++) {
+    if (!vim_isfilec(*s) && *s != ',') {
       return false;
     }
   }
@@ -3032,7 +3102,14 @@ ambw_end:
              || varp == &(curwin->w_s->b_p_spf)) {
     // When 'spelllang' or 'spellfile' is set and there is a window for this
     // buffer in which 'spell' is set load the wordlists.
-    errmsg = did_set_spell_option(varp == &(curwin->w_s->b_p_spf));
+    const bool is_spellfile = varp == &(curwin->w_s->b_p_spf);
+
+    if ((is_spellfile && !valid_spellfile(*varp))
+        || (!is_spellfile && !valid_spellang(*varp))) {
+      errmsg = e_invarg;
+    } else {
+      errmsg = did_set_spell_option(is_spellfile);
+    }
   } else if (varp == &(curwin->w_s->b_p_spc)) {
     // When 'spellcapcheck' is set compile the regexp program.
     errmsg = compile_cap_prog(curwin->w_s);
@@ -3131,6 +3208,11 @@ ambw_end:
   } else if (varp == &curwin->w_p_scl) {
     // 'signcolumn'
     if (check_opt_strings(*varp, p_scl_values, false) != OK) {
+      errmsg = e_invarg;
+    }
+  } else if (varp == &curwin->w_p_fdc || varp == &curwin->w_allbuf_opt.wo_fdc) {
+    // 'foldcolumn'
+    if (check_opt_strings(*varp, p_fdc_values, false) != OK) {
       errmsg = e_invarg;
     }
   } else if (varp == &p_pt) {
@@ -3586,7 +3668,7 @@ static char_u *set_chars_option(win_T *wp, char_u **varp, bool set)
   }
 
   // first round: check for valid value, second round: assign values
-  for (round = 0; round <= set ? 1 : 0; round++) {
+  for (round = 0; round <= (set ? 1 : 0); round++) {
     if (round > 0) {
       // After checking that the value is valid: set defaults
       for (i = 0; i < entries; i++) {
@@ -3761,11 +3843,12 @@ static char_u *did_set_spell_option(bool is_spellfile)
  * Return error message when failed, NULL when OK.
  */
 static char_u *compile_cap_prog(synblock_T *synblock)
+  FUNC_ATTR_NONNULL_ALL
 {
   regprog_T   *rp = synblock->b_cap_prog;
   char_u      *re;
 
-  if (*synblock->b_p_spc == NUL) {
+  if (synblock->b_p_spc == NULL || *synblock->b_p_spc == NUL) {
     synblock->b_cap_prog = NULL;
   } else {
     // Prepend a ^ so that we only match at one column
@@ -3805,7 +3888,8 @@ static bool parse_winhl_opt(win_T *wp)
       w_hl_id_normal = hl_id;
     } else {
       for (hlf = 0; hlf < (int)HLF_COUNT; hlf++) {
-        if (strncmp(hlf_names[hlf], p, nlen) == 0) {
+        if (strlen(hlf_names[hlf]) == nlen
+            && strncmp(hlf_names[hlf], p, nlen) == 0) {
           w_hl_ids[hlf] = hl_id;
           break;
         }
@@ -4274,7 +4358,7 @@ static char *set_num_option(int opt_idx, char_u *varp, long value,
     }
   } else if (pp == &p_so) {
     if (value < 0 && full_screen) {
-      errmsg = e_scroll;
+      errmsg = e_positive;
     }
   } else if (pp == &p_siso) {
     if (value < 0 && full_screen) {
@@ -4295,12 +4379,6 @@ static char *set_num_option(int opt_idx, char_u *varp, long value,
   } else if (pp == &curwin->w_p_fdl || pp == &curwin->w_allbuf_opt.wo_fdl) {
     if (value < 0) {
       errmsg = e_positive;
-    }
-  } else if (pp == &curwin->w_p_fdc || pp == &curwin->w_allbuf_opt.wo_fdc) {
-    if (value < 0) {
-      errmsg = e_positive;
-    } else if (value > 12) {
-      errmsg = e_invarg;
     }
   } else if (pp == &curwin->w_p_cole || pp == &curwin->w_allbuf_opt.wo_cole) {
     if (value < 0) {
@@ -5257,20 +5335,20 @@ showoneopt(
  * Write modified options as ":set" commands to a file.
  *
  * There are three values for "opt_flags":
- * OPT_GLOBAL:		   Write global option values and fresh values of
- *			   buffer-local options (used for start of a session
- *			   file).
+ * OPT_GLOBAL:         Write global option values and fresh values of
+ *             buffer-local options (used for start of a session
+ *             file).
  * OPT_GLOBAL + OPT_LOCAL: Idem, add fresh values of window-local options for
- *			   curwin (used for a vimrc file).
- * OPT_LOCAL:		   Write buffer-local option values for curbuf, fresh
- *			   and local values for window-local options of
- *			   curwin.  Local values are also written when at the
- *			   default value, because a modeline or autocommand
- *			   may have set them when doing ":edit file" and the
- *			   user has set them back at the default or fresh
- *			   value.
- *			   When "local_only" is true, don't write fresh
- *			   values, only local values (for ":mkview").
+ *             curwin (used for a vimrc file).
+ * OPT_LOCAL:          Write buffer-local option values for curbuf, fresh
+ *             and local values for window-local options of
+ *             curwin.  Local values are also written when at the
+ *             default value, because a modeline or autocommand
+ *             may have set them when doing ":edit file" and the
+ *             user has set them back at the default or fresh
+ *             value.
+ *             When "local_only" is true, don't write fresh
+ *             values, only local values (for ":mkview").
  * (fresh value = value used for a new buffer or window for a local option).
  *
  * Return FAIL on error, OK otherwise.
@@ -5565,6 +5643,12 @@ void unset_global_local_option(char *name, void *from)
       clear_string_option(&buf->b_p_tc);
       buf->b_tc_flags = 0;
       break;
+    case PV_SISO:
+      curwin->w_p_siso = -1;
+      break;
+    case PV_SO:
+      curwin->w_p_so = -1;
+      break;
     case PV_DEF:
       clear_string_option(&buf->b_p_def);
       break;
@@ -5637,6 +5721,8 @@ static char_u *get_varp_scope(vimoption_T *p, int opt_flags)
     case PV_AR:   return (char_u *)&(curbuf->b_p_ar);
     case PV_TAGS: return (char_u *)&(curbuf->b_p_tags);
     case PV_TC:   return (char_u *)&(curbuf->b_p_tc);
+    case PV_SISO: return (char_u *)&(curwin->w_p_siso);
+    case PV_SO:   return (char_u *)&(curwin->w_p_so);
     case PV_DEF:  return (char_u *)&(curbuf->b_p_def);
     case PV_INC:  return (char_u *)&(curbuf->b_p_inc);
     case PV_DICT: return (char_u *)&(curbuf->b_p_dict);
@@ -5681,6 +5767,10 @@ static char_u *get_varp(vimoption_T *p)
            ? (char_u *)&(curbuf->b_p_tags) : p->var;
   case PV_TC:     return *curbuf->b_p_tc != NUL
            ? (char_u *)&(curbuf->b_p_tc) : p->var;
+  case PV_SISO:   return curwin->w_p_siso >= 0
+           ? (char_u *)&(curwin->w_p_siso) : p->var;
+  case PV_SO:     return curwin->w_p_so >= 0
+           ? (char_u *)&(curwin->w_p_so) : p->var;
   case PV_BKC:    return *curbuf->b_p_bkc != NUL
            ? (char_u *)&(curbuf->b_p_bkc) : p->var;
   case PV_DEF:    return *curbuf->b_p_def != NUL
@@ -5869,8 +5959,9 @@ void copy_winopt(winopt_T *from, winopt_T *to)
   to->wo_diff_saved = from->wo_diff_saved;
   to->wo_cocu = vim_strsave(from->wo_cocu);
   to->wo_cole = from->wo_cole;
-  to->wo_fdc = from->wo_fdc;
-  to->wo_fdc_save = from->wo_fdc_save;
+  to->wo_fdc = vim_strsave(from->wo_fdc);
+  to->wo_fdc_save = from->wo_diff_saved
+                    ? vim_strsave(from->wo_fdc_save) : empty_option;
   to->wo_fen = from->wo_fen;
   to->wo_fen_save = from->wo_fen_save;
   to->wo_fdi = vim_strsave(from->wo_fdi);
@@ -5906,6 +5997,8 @@ void check_win_options(win_T *win)
  */
 static void check_winopt(winopt_T *wop)
 {
+  check_string_option(&wop->wo_fdc);
+  check_string_option(&wop->wo_fdc_save);
   check_string_option(&wop->wo_fdi);
   check_string_option(&wop->wo_fdm);
   check_string_option(&wop->wo_fdm_save);
@@ -5928,6 +6021,8 @@ static void check_winopt(winopt_T *wop)
  */
 void clear_winopt(winopt_T *wop)
 {
+  clear_string_option(&wop->wo_fdc);
+  clear_string_option(&wop->wo_fdc_save);
   clear_string_option(&wop->wo_fdi);
   clear_string_option(&wop->wo_fdm);
   clear_string_option(&wop->wo_fdm_save);
@@ -5960,10 +6055,10 @@ void didset_window_options(win_T *wp)
  * Copy global option values to local options for one buffer.
  * Used when creating a new buffer and sometimes when entering a buffer.
  * flags:
- * BCO_ENTER	We will enter the buf buffer.
- * BCO_ALWAYS	Always copy the options, but only set b_p_initialized when
- *		appropriate.
- * BCO_NOHELP	Don't copy the values to a help buffer.
+ * BCO_ENTER    We will enter the buf buffer.
+ * BCO_ALWAYS   Always copy the options, but only set b_p_initialized when
+ *      appropriate.
+ * BCO_NOHELP   Don't copy the values to a help buffer.
  */
 void buf_copy_options(buf_T *buf, int flags)
 {
@@ -6006,10 +6101,8 @@ void buf_copy_options(buf_T *buf, int flags)
         save_p_isk = buf->b_p_isk;
         buf->b_p_isk = NULL;
       }
-      /*
-       * Always free the allocated strings.
-       * If not already initialized, set 'readonly' and copy 'fileformat'.
-       */
+      // Always free the allocated strings.  If not already initialized,
+      // reset 'readonly' and copy 'fileformat'.
       if (!buf->b_p_initialized) {
         free_buf_options(buf, true);
         buf->b_p_ro = false;                    // don't copy readonly
@@ -7025,10 +7118,13 @@ static int check_opt_wim(void)
  */
 bool can_bs(int what)
 {
+  if (what == BS_START && bt_prompt(curbuf)) {
+    return false;
+  }
   switch (*p_bs) {
-  case '2':       return true;
-  case '1':       return what != BS_START;
-  case '0':       return false;
+    case '2':       return true;
+    case '1':       return what != BS_START;
+    case '0':       return false;
   }
   return vim_strchr(p_bs, what) != NULL;
 }
@@ -7224,12 +7320,13 @@ int get_fileformat(buf_T *buf)
 /// argument.
 ///
 /// @param eap  can be NULL!
-int get_fileformat_force(buf_T *buf, exarg_T *eap)
+int get_fileformat_force(const buf_T *buf, const exarg_T *eap)
+  FUNC_ATTR_NONNULL_ARG(1)
 {
   int c;
 
   if (eap != NULL && eap->force_ff != 0) {
-    c = eap->cmd[eap->force_ff];
+    c = eap->force_ff;
   } else {
     if ((eap != NULL && eap->force_bin != 0)
         ? (eap->force_bin == FORCE_BIN) : buf->b_p_bin) {
@@ -7409,3 +7506,18 @@ dict_T *get_winbuf_options(const int bufopt)
 
   return d;
 }
+
+/// Return the effective 'scrolloff' value for the current window, using the
+/// global value when appropriate.
+long get_scrolloff_value(void)
+{
+  return curwin->w_p_so < 0 ? p_so : curwin->w_p_so;
+}
+
+/// Return the effective 'sidescrolloff' value for the current window, using the
+/// global value when appropriate.
+long get_sidescrolloff_value(void)
+{
+  return curwin->w_p_siso < 0 ? p_siso : curwin->w_p_siso;
+}
+

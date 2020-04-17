@@ -618,7 +618,6 @@ void win_set_minimal_style(win_T *wp)
   wp->w_p_cuc = false;
   wp->w_p_spell = false;
   wp->w_p_list = false;
-  wp->w_p_fdc = 0;
 
   // Hide EOB region: use " " fillchar and cleared highlighting
   if (wp->w_p_fcs_chars.eob != ' ') {
@@ -640,6 +639,12 @@ void win_set_minimal_style(win_T *wp)
   if (wp->w_p_scl[0] != 'a') {
     xfree(wp->w_p_scl);
     wp->w_p_scl = (char_u *)xstrdup("auto");
+  }
+
+  // foldcolumn: use 'auto'
+  if (wp->w_p_fdc[0] != '0') {
+    xfree(wp->w_p_fdc);
+    wp->w_p_fdc = (char_u *)xstrdup("0");
   }
 
   // colorcolumn: cleared
@@ -688,6 +693,21 @@ void win_check_anchored_floats(win_T *win)
     }
   }
 }
+
+/// Return the number of fold columns to display
+int win_fdccol_count(win_T *wp)
+{
+  const char *fdc = (const char *)wp->w_p_fdc;
+
+  // auto:<NUM>
+  if (strncmp(fdc, "auto:", 5) == 0) {
+    int needed_fdccols = getDeepestNesting(wp);
+    return MIN(fdc[5] - '0', needed_fdccols);
+  } else {
+    return fdc[0] - '0';
+  }
+}
+
 
 static void ui_ext_win_position(win_T *wp)
 {
@@ -753,6 +773,21 @@ static void ui_ext_win_position(win_T *wp)
 
 }
 
+void ui_ext_win_viewport(win_T *wp)
+{
+  if ((wp == curwin || ui_has(kUIMultigrid)) && wp->w_viewport_invalid) {
+    int botline = wp->w_botline;
+    if (botline == wp->w_buffer->b_ml.ml_line_count+1
+        && wp->w_empty_rows == 0) {
+      // TODO(bfredl): The might be more cases to consider, like how does this
+      // interact with incomplete final line? Diff filler lines?
+      botline = wp->w_buffer->b_ml.ml_line_count;
+    }
+    ui_call_win_viewport(wp->w_grid.handle, wp->handle, wp->w_topline-1,
+                         botline, wp->w_cursor.lnum-1, wp->w_cursor.col);
+    wp->w_viewport_invalid = false;
+  }
+}
 
 static bool parse_float_anchor(String anchor, FloatAnchor *out)
 {
@@ -4668,6 +4703,11 @@ static win_T *win_alloc(win_T *after, int hidden)
   new_wp->w_scbind_pos = 1;
   new_wp->w_floating = 0;
   new_wp->w_float_config = FLOAT_CONFIG_INIT;
+  new_wp->w_viewport_invalid = true;
+
+  // use global option for global-local options
+  new_wp->w_p_so = -1;
+  new_wp->w_p_siso = -1;
 
   /* We won't calculate w_fraction until resizing the window */
   new_wp->w_fraction = 0;
@@ -5779,9 +5819,10 @@ void scroll_to_fraction(win_T *wp, int prev_height)
   }
 
   if (wp == curwin) {
-    if (p_so)
+    if (get_scrolloff_value()) {
       update_topline();
-    curs_columns(FALSE);        /* validate w_wrow */
+    }
+    curs_columns(false);        // validate w_wrow
   }
   if (prev_height > 0) {
     wp->w_prev_fraction_row = wp->w_wrow;
@@ -6503,10 +6544,12 @@ void restore_buffer(bufref_T *save_curbuf)
 /// @param[in] id a desired ID 'id' can be specified
 ///               (greater than or equal to 1). -1 must be specified if no
 ///               particular ID is desired
+/// @param[in] conceal_char pointer to conceal replacement char
 /// @return ID of added match, -1 on failure.
 int match_add(win_T *wp, const char *const grp, const char *const pat,
               int prio, int id, list_T *pos_list,
               const char *const conceal_char)
+  FUNC_ATTR_NONNULL_ARG(1, 2)
 {
   matchitem_T *cur;
   matchitem_T *prev;
@@ -6543,7 +6586,7 @@ int match_add(win_T *wp, const char *const grp, const char *const pat,
     return -1;
   }
 
-  /* Find available match ID. */
+  // Find available match ID.
   while (id == -1) {
     cur = wp->w_match_head;
     while (cur != NULL && cur->id != wp->w_next_match_id)
@@ -6553,7 +6596,7 @@ int match_add(win_T *wp, const char *const grp, const char *const pat,
     wp->w_next_match_id++;
   }
 
-  /* Build new match. */
+  // Build new match.
   m = xcalloc(1, sizeof(matchitem_T));
   m->id = id;
   m->priority = prio;
@@ -6661,9 +6704,9 @@ int match_add(win_T *wp, const char *const grp, const char *const pat,
       rtype = VALID;
     }
   }
- 
-  /* Insert new match.  The match list is in ascending order with regard to
-   * the match priorities. */
+
+  // Insert new match.  The match list is in ascending order with regard to
+  // the match priorities.
   cur = wp->w_match_head;
   prev = cur;
   while (cur != NULL && prio >= cur->priority) {
@@ -6967,7 +7010,7 @@ void get_framelayout(const frame_T *fr, list_T *l, bool outer)
   }
 }
 
-void win_ui_flush_positions(void)
+void win_ui_flush(void)
 {
   FOR_ALL_TAB_WINDOWS(tp, wp) {
     if (wp->w_pos_changed && wp->w_grid.chars != NULL) {
@@ -6977,6 +7020,9 @@ void win_ui_flush_positions(void)
         ui_call_win_hide(wp->w_grid.handle);
       }
       wp->w_pos_changed = false;
+    }
+    if (tp == curtab) {
+      ui_ext_win_viewport(wp);
     }
   }
 }
