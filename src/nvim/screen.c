@@ -1741,6 +1741,31 @@ static int advance_color_col(int vcol, int **color_cols)
   return **color_cols >= 0;
 }
 
+// Returns the next grid column.
+static int text_to_screenline(win_T *wp, char_u *text, int col, int off)
+  FUNC_ATTR_NONNULL_ALL
+{
+  int idx = wp->w_p_rl ? off : off + col;
+  LineState s = LINE_STATE(text);
+
+  while (*s.p != NUL) {
+    // TODO(bfredl): cargo-culted from the old Vim code:
+    // if(col + cells > wp->w_width - (wp->w_p_rl ? col : 0)) { break; }
+    // This is obvious wrong. If Vim ever fixes this, solve for "cells" again
+    // in the correct condition.
+    const int maxcells = wp->w_grid.Columns - col - (wp->w_p_rl ? col : 0);
+    const int cells = line_putchar(&s, &linebuf_char[idx], maxcells,
+                                   wp->w_p_rl);
+    if (cells == -1) {
+      break;
+    }
+    col += cells;
+    idx += cells;
+  }
+
+  return col;
+}
+
 // Compute the width of the foldcolumn.  Based on 'foldcolumn' and how much
 // space is available for window "wp", minus "col".
 static int compute_foldcolumn(win_T *wp, int col)
@@ -1942,29 +1967,7 @@ static void fold_line(win_T *wp, long fold_count, foldinfo_T *foldinfo, linenr_T
   // 5. move the text to linebuf_char[off].  Fill up with "fold".
   //    Right-left text is put in columns 0 - number-col, normal text is put
   //    in columns number-col - window-width.
-  int idx;
-
-  if (wp->w_p_rl) {
-    idx = off;
-  } else {
-    idx = off + col;
-  }
-
-  LineState s = LINE_STATE(text);
-
-  while (*s.p != NUL) {
-    // TODO(bfredl): cargo-culted from the old Vim code:
-    // if(col + cells > wp->w_width - (wp->w_p_rl ? col : 0)) { break; }
-    // This is obvious wrong. If Vim ever fixes this, solve for "cells" again
-    // in the correct condition.
-    int maxcells = wp->w_grid.Columns - col - (wp->w_p_rl ? col : 0);
-    int cells = line_putchar(&s, &linebuf_char[idx], maxcells, wp->w_p_rl);
-    if (cells == -1) {
-      break;
-    }
-    col += cells;
-    idx += cells;
-  }
+  col = text_to_screenline(wp, text, col, off);
 
   /* Fill the rest of the line with the fold filler */
   if (wp->w_p_rl)
@@ -2963,11 +2966,11 @@ win_line (
         }
       }
 
-      if (wp->w_p_brisbr && draw_state == WL_BRI - 1
+      if (wp->w_briopt_sbr && draw_state == WL_BRI - 1
           && n_extra == 0 && *p_sbr != NUL) {
         // draw indent after showbreak value
         draw_state = WL_BRI;
-      } else if (wp->w_p_brisbr && draw_state == WL_SBR && n_extra == 0) {
+      } else if (wp->w_briopt_sbr && draw_state == WL_SBR && n_extra == 0) {
         // after the showbreak, draw the breakindent
         draw_state = WL_BRI - 1;
       }
@@ -2991,7 +2994,13 @@ win_line (
           c_final = NUL;
           n_extra =
             get_breakindent_win(wp, ml_get_buf(wp->w_buffer, lnum, false));
-          if (wp->w_skipcol > 0 && wp->w_p_wrap) {
+          if (row == startrow) {
+            n_extra -= win_col_off2(wp);
+            if (n_extra < 0) {
+              n_extra = 0;
+            }
+          }
+          if (wp->w_skipcol > 0 && wp->w_p_wrap && wp->w_briopt_sbr) {
             need_showbreak = false;
           }
           // Correct end of highlighted area for 'breakindent',
@@ -5711,6 +5720,7 @@ void grid_puts_line_flush(bool set_cursor)
 static void start_search_hl(void)
 {
   if (p_hls && !no_hlsearch) {
+    end_search_hl();  // just in case it wasn't called before
     last_pat_prog(&search_hl.rm);
     // Set the time limit to 'redrawtime'.
     search_hl.tm = profile_setlimit(p_rdt);

@@ -24,7 +24,7 @@
 #include "nvim/diff.h"
 #include "nvim/digraph.h"
 #include "nvim/edit.h"
-#include "nvim/eval.h"
+#include "nvim/eval/userfunc.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds2.h"
 #include "nvim/ex_docmd.h"
@@ -621,6 +621,8 @@ static void normal_redraw_mode_message(NormalState *s)
     update_screen(0);
     // now reset it, otherwise it's put in the history again
     keep_msg = kmsg;
+
+    kmsg = vim_strsave(keep_msg);
     msg_attr((const char *)kmsg, keep_msg_attr);
     xfree(kmsg);
   }
@@ -1260,13 +1262,20 @@ static void normal_redraw(NormalState *s)
     maketitle();
   }
 
+  curbuf->b_last_used = time(NULL);
+
   // Display message after redraw. If an external message is still visible,
   // it contains the kept message already.
   if (keep_msg != NULL && !msg_ext_is_visible()) {
-    // msg_attr_keep() will set keep_msg to NULL, must free the string here.
-    // Don't reset keep_msg, msg_attr_keep() uses it to check for duplicates.
-    char *p = (char *)keep_msg;
-    msg_attr(p, keep_msg_attr);
+    char_u *const p = vim_strsave(keep_msg);
+
+    // msg_start() will set keep_msg to NULL, make a copy
+    // first.  Don't reset keep_msg, msg_attr_keep() uses it to
+    // check for duplicates.  Never put this message in
+    // history.
+    msg_hist_off = true;
+    msg_attr((const char *)p, keep_msg_attr);
+    msg_hist_off = false;
     xfree(p);
   }
 
@@ -2559,7 +2568,14 @@ do_mouse (
    * JUMP!
    */
   jump_flags = jump_to_mouse(jump_flags,
-      oap == NULL ? NULL : &(oap->inclusive), which_button);
+                             oap == NULL ? NULL : &(oap->inclusive),
+                             which_button);
+
+  // A click in the window toolbar has no side effects.
+  if (jump_flags & MOUSE_WINBAR) {
+    return false;
+  }
+
   moved = (jump_flags & CURSOR_MOVED);
   in_status_line = (jump_flags & IN_STATUS_LINE);
   in_sep_line = (jump_flags & IN_SEP_LINE);
