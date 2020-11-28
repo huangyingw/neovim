@@ -516,7 +516,7 @@ func Test_termguicolors()
   if !exists('+termguicolors')
     return
   endif
-  if has('vtp') && !has('vcon')
+  if has('vtp') && !has('vcon') && !has('gui_running')
     " Win32: 'guicolors' doesn't work without virtual console.
     call assert_fails('set termguicolors', 'E954:')
     return
@@ -596,9 +596,17 @@ endfunc
 " This test must come before the Test_cursorline test, as it appears this
 " defines the Normal highlighting group anyway.
 func Test_1_highlight_Normalgroup_exists()
-  " MS-Windows GUI sets the font
-  if !has('win32') || !has('gui_running')
-    let hlNormal = HighlightArgs('Normal')
+  let hlNormal = HighlightArgs('Normal')
+  if !has('gui_running')
     call assert_match('hi Normal\s*clear', hlNormal)
+  elseif has('gui_gtk2') || has('gui_gnome') || has('gui_gtk3')
+    " expect is DEFAULT_FONT of gui_gtk_x11.c
+    call assert_match('hi Normal\s*font=Monospace 10', hlNormal)
+  elseif has('gui_motif') || has('gui_athena')
+    " expect is DEFAULT_FONT of gui_x11.c
+    call assert_match('hi Normal\s*font=7x13', hlNormal)
+  elseif has('win32')
+    " expect any font
+    call assert_match('hi Normal\s*font=.*', hlNormal)
   endif
 endfunc

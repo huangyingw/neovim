@@ -1068,10 +1068,6 @@ endfunc
 "-------------------------------------------------------------------------------
 
 func Test_num64()
-    if !has('num64')
-	return
-    endif
-
     call assert_notequal( 4294967296, 0)
     call assert_notequal(-4294967296, 0)
     call assert_equal( 4294967296,  0xFFFFffff + 1)
@@ -1313,27 +1309,15 @@ func Test_compound_assignment_operators()
     " Test special cases: division or modulus with 0.
     let x = 1
     let x /= 0
-    if has('num64')
-        call assert_equal(0x7FFFFFFFFFFFFFFF, x)
-    else
-        call assert_equal(0x7fffffff, x)
-    endif
+    call assert_equal(0x7FFFFFFFFFFFFFFF, x)
 
     let x = -1
     let x /= 0
-    if has('num64')
-        call assert_equal(-0x7FFFFFFFFFFFFFFF, x)
-    else
-        call assert_equal(-0x7fffffff, x)
-    endif
+    call assert_equal(-0x7FFFFFFFFFFFFFFF, x)
 
     let x = 0
     let x /= 0
-    if has('num64')
-        call assert_equal(-0x7FFFFFFFFFFFFFFF - 1, x)
-    else
-        call assert_equal(-0x7FFFFFFF - 1, x)
-    endif
+    call assert_equal(-0x7FFFFFFFFFFFFFFF - 1, x)
 
     let x = 1
     let x %= 0
@@ -1407,6 +1391,17 @@ func Test_compound_assignment_operators()
     let @/ .= 's'
     call assert_equal('1s', @/)
     let @/ = ''
+endfunc
+
+func Test_funccall_garbage_collect()
+    func Func(x, ...)
+        call add(a:x, a:000)
+    endfunc
+    call Func([], [])
+    " Must not crash cause by invalid freeing
+    call test_garbagecollect_now()
+    call assert_true(v:true)
+    delfunc Func
 endfunc
 
 func Test_function_defined_line()

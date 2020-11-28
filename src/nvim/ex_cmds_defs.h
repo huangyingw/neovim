@@ -62,7 +62,6 @@
                                 // curbuf_lock is set
 #define MODIFY       0x200000   // forbidden in non-'modifiable' buffer
 #define EXFLAGS      0x400000   // allow flags after count in argument
-#define RESTRICT     0x800000L  // forbidden in restricted mode
 #define FILES (XFILE | EXTRA)   // multiple extra files allowed
 #define WORD1 (EXTRA | NOSPC)   // one extra word allowed
 #define FILE1 (FILES | NOSPC)   // 1 file allowed, defaults to current file
@@ -169,6 +168,10 @@ struct exarg {
   LineGetter getline;           ///< Function used to get the next line
   void   *cookie;               ///< argument for getline()
   cstack_T *cstack;             ///< condition stack for ":if" etc.
+  long verbose_save;            ///< saved value of p_verbose
+  int save_msg_silent;          ///< saved value of msg_silent
+  int did_esilent;              ///< how many times emsg_silent was incremented
+  bool did_sandbox;             ///< when true did sandbox++
 };
 
 #define FORCE_BIN 1             // ":edit ++bin file"

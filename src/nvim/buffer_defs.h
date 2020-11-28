@@ -91,6 +91,7 @@ typedef struct {
 #define BF_READERR      0x40    // got errors while reading the file
 #define BF_DUMMY        0x80    // dummy buffer, only used internally
 #define BF_PRESERVED    0x100   // ":preserve" was used
+#define BF_SYN_SET      0x200   // 'syntax' option was set
 
 // Mask to check for flags that prevent normal writing
 #define BF_WRITE_MASK   (BF_NOTEDITED + BF_NEW + BF_READERR)
@@ -360,18 +361,44 @@ struct mapblock {
   sctx_T m_script_ctx;          // SCTX where map was defined
 };
 
-/*
- * Used for highlighting in the status line.
- */
+/// Used for highlighting in the status line.
+typedef struct stl_hlrec stl_hlrec_t;
 struct stl_hlrec {
   char_u      *start;
   int userhl;                   // 0: no HL, 1-9: User HL, < 0 for syn ID
+};
+
+/// Used for building the status line.
+typedef struct stl_item stl_item_t;
+struct stl_item {
+  // Where the item starts in the status line output buffer
+  char_u *start;
+  // Function to run for ClickFunc items.
+  char *cmd;
+  // The minimum width of the item
+  int minwid;
+  // The maximum width of the item
+  int maxwid;
+  enum {
+    Normal,
+    Empty,
+    Group,
+    Separate,
+    Highlight,
+    TabPage,
+    ClickFunc,
+    Trunc
+  } type;
 };
 
 // values for b_syn_spell: what to do with toplevel text
 #define SYNSPL_DEFAULT  0       // spell check if @Spell not defined
 #define SYNSPL_TOP      1       // spell check toplevel text
 #define SYNSPL_NOTOP    2       // don't spell check toplevel text
+
+// values for b_syn_foldlevel: how to compute foldlevel on a line
+#define SYNFLD_START    0       // use level of item at start of line
+#define SYNFLD_MINIMUM  1       // use lowest local minimum level on line
 
 // avoid #ifdefs for when b_spell is not available
 # define B_SPELL(buf)  ((buf)->b_spell)
@@ -398,6 +425,7 @@ typedef struct {
   int b_syn_error;                      // TRUE when error occurred in HL
   bool b_syn_slow;                      // true when 'redrawtime' reached
   int b_syn_ic;                         // ignore case for :syn cmds
+  int b_syn_foldlevel;                  // how to compute foldlevel on a line
   int b_syn_spell;                      // SYNSPL_ values
   garray_T b_syn_patterns;              // table for syntax patterns
   garray_T b_syn_clusters;              // table for syntax clusters
@@ -446,6 +474,7 @@ typedef struct {
   regprog_T   *b_cap_prog;      // program for 'spellcapcheck'
   char_u      *b_p_spf;         // 'spellfile'
   char_u      *b_p_spl;         // 'spelllang'
+  char_u      *b_p_spo;         // 'spelloptions'
   int b_cjk;                    // all CJK letters as OK
   char_u b_syn_chartab[32];     // syntax iskeyword option
   char_u *b_syn_isk;            // iskeyword option
@@ -512,6 +541,9 @@ struct file_buffer {
 
   int b_changed;                // 'modified': Set to true if something in the
                                 // file has been changed and not written out.
+  bool b_changed_invalid;       // Set if BufModified autocmd has not been
+                                // triggered since the last time b_changed was
+                                // modified.
 
   /// Change-identifier incremented for each change, including undo.
   ///
@@ -538,6 +570,9 @@ struct file_buffer {
   long b_mod_xlines;            // number of extra buffer lines inserted;
                                 // negative when lines were deleted
   wininfo_T   *b_wininfo;       // list of last used info for each window
+  int b_mod_tick_syn;           // last display tick syntax was updated
+  int b_mod_tick_decor;         // last display tick decoration providers
+                                // where invoked
 
   long b_mtime;                 // last change time of original file
   long b_mtime_read;            // last change time when reading
@@ -651,6 +686,9 @@ struct file_buffer {
   char_u *b_p_com;              ///< 'comments'
   char_u *b_p_cms;              ///< 'commentstring'
   char_u *b_p_cpt;              ///< 'complete'
+#ifdef BACKSLASH_IN_FILENAME
+  char_u *b_p_csl;              ///< 'completeslash'
+#endif
   char_u *b_p_cfu;              ///< 'completefunc'
   char_u *b_p_ofu;              ///< 'omnifunc'
   char_u *b_p_tfu;              ///< 'tagfunc'
@@ -760,6 +798,7 @@ struct file_buffer {
   int b_ind_cpp_namespace;
   int b_ind_if_for_while;
   int b_ind_cpp_extern_c;
+  int b_ind_pragma;
 
   linenr_T b_no_eol_lnum;       /* non-zero lnum when last line of next binary
                                  * write should not have an end-of-line */
@@ -830,17 +869,12 @@ struct file_buffer {
   // tree-sitter) or the corresponding UTF-32/UTF-16 size (like LSP) of the
   // deleted text.
   size_t deleted_bytes;
+  size_t deleted_bytes2;
   size_t deleted_codepoints;
   size_t deleted_codeunits;
 
   // The number for times the current line has been flushed in the memline.
   int flush_count;
-
-  bool b_luahl;
-  LuaRef b_luahl_start;
-  LuaRef b_luahl_window;
-  LuaRef b_luahl_line;
-  LuaRef b_luahl_end;
 
   int b_diff_failed;    // internal diff failed for this buffer
 };
@@ -1098,12 +1132,6 @@ struct VimMenu {
   vimmenu_T   *next;                 ///< Next item in menu
 };
 
-typedef struct {
-  int wb_startcol;
-  int wb_endcol;
-  vimmenu_T *wb_menu;
-} winbar_item_T;
-
 /// Structure which contains all information that belongs to a window.
 ///
 /// All row numbers are relative to the start of the window, except w_winrow.
@@ -1198,6 +1226,13 @@ struct window_S {
                                     // 'wrap' is off
   colnr_T w_skipcol;                // starting column when a single line
                                     // doesn't fit in the window
+
+  // "w_last_topline" and "w_last_leftcol" are used to determine if
+  // a Scroll autocommand should be emitted.
+  linenr_T w_last_topline;          ///< last known value for topline
+  colnr_T w_last_leftcol;          ///< last known value for leftcol
+  int w_last_width;                 ///< last known value for width
+  int w_last_height;                ///< last known value for height
 
   //
   // Layout of the window in the screen.
@@ -1313,10 +1348,6 @@ struct window_S {
 
   char_u      *w_localdir;          /* absolute path of local directory or
                                        NULL */
-  vimmenu_T *w_winbar;            // The root of the WinBar menu hierarchy.
-  winbar_item_T *w_winbar_items;  // list of items in the WinBar
-  int w_winbar_height;            // 1 if there is a window toolbar
-
   // Options local to a window.
   // They are local because they influence the layout of the window or
   // depend on the window layout.

@@ -180,6 +180,8 @@ struct listvar_S {
   int lv_idx;  ///< Index of a cached item, used for optimising repeated l[idx].
   int lv_copyID;  ///< ID used by deepcopy().
   VarLockStatus lv_lock;  ///< Zero, VAR_LOCKED, VAR_FIXED.
+
+  LuaRef lua_table_ref;
 };
 
 // Static list with 10 items. Use tv_list_init_static10() to initialize.
@@ -245,6 +247,8 @@ struct dictvar_S {
   dict_T *dv_used_next;   ///< Next dictionary in used dictionaries list.
   dict_T *dv_used_prev;   ///< Previous dictionary in used dictionaries list.
   QUEUE watchers;         ///< Dictionary key watchers set by user code.
+
+  LuaRef lua_table_ref;
 };
 
 /// Type used for script ID
@@ -271,6 +275,12 @@ typedef struct {
 /// Number of fixed variables used for arguments
 #define FIXVAR_CNT 12
 
+/// Callback interface for C function reference>
+///     Used for managing functions that were registered with |register_cfunc|
+typedef int (*cfunc_T)(int argcount, typval_T *argvars, typval_T *rettv, void *state);  // NOLINT
+/// Callback to clear cfunc_T and any associated state.
+typedef void (*cfunc_free_T)(void *state);
+
 // Structure to hold info for a function that is currently being executed.
 typedef struct funccall_S funccall_T;
 
@@ -291,7 +301,8 @@ struct funccall_S {
   int dbg_tick;  ///< Debug_tick when breakpoint was set.
   int level;  ///< Top nesting level of executed function.
   proftime_T prof_child;  ///< Time spent in a child.
-  funccall_T *caller;  ///< Calling function or NULL.
+  funccall_T *caller;  ///< Calling function or NULL; or next funccal in
+                       ///< list pointed to by previous_funccal.
   int fc_refcount;  ///< Number of user functions that reference this funccall.
   int fc_copyID;  ///< CopyID used for garbage collection.
   garray_T fc_funcs;  ///< List of ufunc_T* which keep a reference to "func".
@@ -307,6 +318,10 @@ struct ufunc {
   garray_T     uf_lines;         ///< function lines
   int          uf_profiling;     ///< true when func is being profiled
   int          uf_prof_initialized;
+  // Managing cfuncs
+  cfunc_T      uf_cb;            ///< C function extension callback
+  cfunc_free_T uf_cb_free;       ///< C function extesion free callback
+  void        *uf_cb_state;      ///< State of C function extension.
   // Profiling the function as a whole.
   int          uf_tm_count;      ///< nr of calls
   proftime_T   uf_tm_total;      ///< time spent in function + children

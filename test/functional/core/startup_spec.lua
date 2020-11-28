@@ -3,9 +3,11 @@ local Screen = require('test.functional.ui.screen')
 
 local clear = helpers.clear
 local command = helpers.command
+local ok = helpers.ok
 local eq = helpers.eq
 local matches = helpers.matches
 local eval = helpers.eval
+local exec_lua = helpers.exec_lua
 local feed = helpers.feed
 local funcs = helpers.funcs
 local mkdir = helpers.mkdir
@@ -17,6 +19,7 @@ local rmdir = helpers.rmdir
 local sleep = helpers.sleep
 local iswin = helpers.iswin
 local write_file = helpers.write_file
+local meths = helpers.meths
 
 describe('startup', function()
   before_each(function()
@@ -303,6 +306,46 @@ describe('startup', function()
                                '+q' })
     eq('[\'+q\'] 1', out)
   end)
+
+  local function pack_clear(cmd)
+    clear('--cmd', 'set packpath=test/functional/fixtures', '--cmd', cmd)
+  end
+
+
+  it("handles &packpath during startup", function()
+    pack_clear [[
+      let g:x = bar#test()
+      let g:y = leftpad#pad("heyya")
+    ]]
+    eq(-3, eval 'g:x')
+    eq("  heyya", eval 'g:y')
+
+    pack_clear [[ lua _G.y = require'bar'.doit() _G.z = require'leftpad''howdy' ]]
+    eq({9003, '\thowdy'}, exec_lua [[ return { _G.y, _G.z } ]])
+  end)
+
+  it("handles :packadd during startup", function()
+    -- control group: opt/bonus is not availabe by default
+    pack_clear [[
+      try
+        let g:x = bonus#secret()
+      catch
+        let g:err = v:exception
+      endtry
+    ]]
+    eq('Vim(let):E117: Unknown function: bonus#secret', eval 'g:err')
+
+    pack_clear [[ lua _G.test = {pcall(function() require'bonus'.launch() end)} ]]
+    eq({false, [[[string ":lua"]:1: module 'bonus' not found:]]},
+       exec_lua [[ _G.test[2] = string.gsub(_G.test[2], '[\r\n].*', '') return _G.test ]])
+
+    -- ok, time to launch the nukes:
+    pack_clear [[ packadd! bonus | let g:x = bonus#secret() ]]
+    eq('halloj', eval 'g:x')
+
+    pack_clear [[ packadd! bonus | lua _G.y = require'bonus'.launch() ]]
+    eq('CPE 1704 TKS', exec_lua [[ return _G.y ]])
+  end)
 end)
 
 describe('sysinit', function()
@@ -356,4 +399,36 @@ describe('sysinit', function()
     eq('loaded 1 xdg 0 vim 1',
        eval('printf("loaded %d xdg %d vim %d", g:loaded, get(g:, "xdg", 0), get(g:, "vim", 0))'))
   end)
+
+  it('fixed hang issue with -D (#12647)', function()
+    local screen
+    screen = Screen.new(60, 6)
+    screen:attach()
+    command([[let g:id = termopen('"]]..nvim_prog..
+    [[" -u NONE -i NONE --cmd "set noruler" -D')]])
+    screen:expect([[
+      ^                                                            |
+      Entering Debug mode.  Type "cont" to continue.              |
+      cmd: augroup nvim_terminal                                  |
+      >                                                           |
+      <" -u NONE -i NONE --cmd "set noruler" -D 1,0-1          All|
+                                                                  |
+    ]])
+    command([[call chansend(g:id, "cont\n")]])
+    screen:expect([[
+      ^                                                            |
+      ~                                                           |
+      [No Name]                                                   |
+                                                                  |
+      <" -u NONE -i NONE --cmd "set noruler" -D 1,0-1          All|
+                                                                  |
+    ]])
+  end)
+end)
+
+describe('clean', function()
+  clear()
+  ok(string.match(meths.get_option('runtimepath'), funcs.stdpath('config')) ~= nil)
+  clear('--clean')
+  ok(string.match(meths.get_option('runtimepath'), funcs.stdpath('config')) == nil)
 end)
