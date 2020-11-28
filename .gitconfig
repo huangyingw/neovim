@@ -13,7 +13,7 @@
     remote = neovim
     merge = refs/heads/master
 [branch "dev"]
-    remote = github
+    remote = origin
     merge = refs/heads/dev
 [gdif]
     ignore = install.sh
