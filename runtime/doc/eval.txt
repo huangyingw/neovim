@@ -8441,8 +8441,6 @@ strftime({format} [, {time}])				*strftime()*
 		  :echo strftime("%H:%M")	   11:55
 		  :echo strftime("%c", getftime("file.c"))
 						   Show mod time of file.c.
-<		Not available on all systems.  To check use: >
-			:if exists("*strftime")
 
 strgetchar({str}, {index})				*strgetchar()*
 		Get character {index} from {str}.  This uses a character
@@ -9332,6 +9330,13 @@ winbufnr({nr})	The result is a Number, which is the number of the buffer
 wincol()	The result is a Number, which is the virtual column of the
 		cursor in the window.  This is counting screen cells from the
 		left side of the window.  The leftmost column is one.
+
+							*windowsversion()*
+windowsversion()
+		The result is a String.  For MS-Windows it indicates the OS
+		version.  E.g, Windows 10 is "10.0", Windows 8 is "6.2",
+		Windows XP is "5.1".  For non-MS-Windows systems the result is
+		an empty string.
 
 winheight({nr})						*winheight()*
 		The result is a Number, which is the height of window {nr}.

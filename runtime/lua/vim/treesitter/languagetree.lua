@@ -121,23 +121,30 @@ function LanguageTree:parse()
   local seen_langs = {}
 
   for lang, injection_ranges in pairs(injections_by_lang) do
-    local child = self._children[lang]
+    local has_lang = language.require_language(lang, nil, true)
 
-    if not child then
-      child = self:add_child(lang)
+    -- Child language trees should just be ignored if not found, since
+    -- they can depend on the text of a node. Intermediate strings
+    -- would cause errors for unknown parsers.
+    if has_lang then
+      local child = self._children[lang]
+
+      if not child then
+        child = self:add_child(lang)
+      end
+
+      child:set_included_regions(injection_ranges)
+
+      local _, child_changes = child:parse()
+
+      -- Propagate any child changes so they are included in the
+      -- the change list for the callback.
+      if child_changes then
+        vim.list_extend(changes, child_changes)
+      end
+
+      seen_langs[lang] = true
     end
-
-    child:set_included_regions(injection_ranges)
-
-    local _, child_changes = child:parse()
-
-    -- Propagate any child changes so they are included in the
-    -- the change list for the callback.
-    if child_changes then
-      vim.list_extend(changes, child_changes)
-    end
-
-    seen_langs[lang] = true
   end
 
   for lang, _ in pairs(self._children) do
@@ -282,7 +289,7 @@ function LanguageTree:_get_injections()
     local root_node = tree:root()
     local start_line, _, end_line, _ = root_node:range()
 
-    for pattern, match in self._injection_query:iter_matches(root_node, self._source, start_line, end_line+1) do
+    for pattern, match, metadata in self._injection_query:iter_matches(root_node, self._source, start_line, end_line+1) do
       local lang = nil
       local injection_node = nil
       local combined = false
@@ -291,9 +298,9 @@ function LanguageTree:_get_injections()
       -- using a tag with the language, for example
       -- @javascript
       for id, node in pairs(match) do
+        local data = metadata[id]
         local name = self._injection_query.captures[id]
-        -- TODO add a way to offset the content passed to the parser.
-        -- Needed to shave off leading quotes and things of that nature.
+        local offset_range = data and data.offset
 
         -- Lang should override any other language tag
         if name == "language" then
@@ -301,7 +308,7 @@ function LanguageTree:_get_injections()
         elseif name == "combined" then
           combined = true
         elseif name == "content" then
-          injection_node = node
+          injection_node = offset_range or node
         -- Ignore any tags that start with "_"
         -- Allows for other tags to be used in matches
         elseif string.sub(name, 1, 1) ~= "_" then
@@ -310,7 +317,7 @@ function LanguageTree:_get_injections()
           end
 
           if not injection_node then
-            injection_node = node
+            injection_node = offset_range or node
           end
         end
       end
@@ -445,7 +452,7 @@ end
 function LanguageTree:language_for_range(range)
   for _, child in pairs(self._children) do
     if child:contains(range) then
-      return child:node_for_range(range)
+      return child:language_for_range(range)
     end
   end
 

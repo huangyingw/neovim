@@ -9,6 +9,15 @@ local meths = helpers.meths
 local source = helpers.source
 local assert_alive = helpers.assert_alive
 
+
+local content1 = [[
+        This is a
+        valid English
+        sentence composed by
+        an exhausted developer
+        in his cave.
+        ]]
+
 describe("folded lines", function()
   before_each(function()
     clear()
@@ -119,18 +128,31 @@ describe("folded lines", function()
 
     it("work with spell", function()
       command("set spell")
-      insert([[
-        This is a
-        valid English
-        sentence composed by
-        an exhausted developer
-        in his cave.
-        ]])
+      insert(content1)
 
       feed("gg")
       feed("zf3j")
       if not multigrid then
-        -- screen:snapshot_util()
+        screen:expect{grid=[[
+          {5:^+--  4 lines: This is a······················}|
+          in his cave.                                 |
+                                                       |
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+                                                       |
+        ]]}
+      end
+    end)
+
+    it("work with matches", function()
+      insert(content1)
+      command("highlight MyWord gui=bold guibg=red   guifg=white")
+      command("call matchadd('MyWord', '\\V' . 'test', -1)")
+      feed("gg")
+      feed("zf3j")
+      if not multigrid then
         screen:expect{grid=[[
           {5:^+--  4 lines: This is a······················}|
           in his cave.                                 |
@@ -864,6 +886,41 @@ describe("folded lines", function()
                                                        |
         ]])
       end
+      command("set foldcolumn=auto")
+      if multigrid then
+        screen:expect{grid=[[
+        ## grid 1
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [3:---------------------------------------------]|
+        ## grid 2
+          {7:+}{5:^+--  2 lines: line 1························}|
+          {7: }line 3                                      |
+          {7: }line 4                                      |
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+        ## grid 3
+                                                       |
+        ]], unchanged=true}
+      else
+        screen:expect{grid=[[
+          {7:+}{5:^+--  2 lines: line 1························}|
+          {7: }line 3                                      |
+          {7: }line 4                                      |
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+                                                       |
+        ]], unchanged=true}
+      end
       -- fdc should not change with a new fold as the maximum is 1
       feed("zf3j")
 
@@ -900,6 +957,41 @@ describe("folded lines", function()
           {1:~                                            }|
                                                        |
         ]])
+      end
+
+      command("set foldcolumn=auto:1")
+      if multigrid then screen:expect{grid=[[
+        ## grid 1
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [2:---------------------------------------------]|
+          [3:---------------------------------------------]|
+        ## grid 2
+          {7:+}{5:^+--  4 lines: line 1························}|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+        ## grid 3
+                                                       |
+        ]], unchanged=true}
+      else
+        screen:expect{grid=[[
+          {7:+}{5:^+--  4 lines: line 1························}|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+          {1:~                                            }|
+                                                       |
+        ]], unchanged=true}
       end
 
       -- relax the maximum fdc thus fdc should expand to

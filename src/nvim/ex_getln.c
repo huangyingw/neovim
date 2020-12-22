@@ -1024,7 +1024,7 @@ static int command_line_execute(VimState *state, int key)
   }
 
   // free expanded names when finished walking through matches
-  if (!(s->c == p_wc && KeyTyped) && s->c != p_wcm
+  if (!(s->c == p_wc && KeyTyped) && s->c != p_wcm && s->c != Ctrl_Z
       && s->c != Ctrl_N && s->c != Ctrl_P && s->c != Ctrl_A
       && s->c != Ctrl_L) {
     if (compl_match_array) {
@@ -1328,7 +1328,8 @@ static int command_line_execute(VimState *state, int key)
   // - hitting <ESC> twice means: abandon command line.
   // - wildcard expansion is only done when the 'wildchar' key is really
   //   typed, not when it comes from a macro
-  if ((s->c == p_wc && !s->gotesc && KeyTyped) || s->c == p_wcm) {
+  if ((s->c == p_wc && !s->gotesc && KeyTyped) || s->c == p_wcm
+      || s->c == Ctrl_Z) {
     int options = WILD_NO_BEEP;
     if (wim_flags[s->wim_index] & WIM_BUFLASTUSED) {
       options |= WILD_BUFLASTUSED;
@@ -4228,17 +4229,11 @@ ExpandOne (
  * Prepare an expand structure for use.
  */
 void ExpandInit(expand_T *xp)
+  FUNC_ATTR_NONNULL_ALL
 {
-  xp->xp_pattern = NULL;
-  xp->xp_pattern_len = 0;
+  CLEAR_POINTER(xp);
   xp->xp_backslash = XP_BS_NONE;
-#ifndef BACKSLASH_IN_FILENAME
-  xp->xp_shell = FALSE;
-#endif
   xp->xp_numfiles = -1;
-  xp->xp_files = NULL;
-  xp->xp_arg = NULL;
-  xp->xp_line = NULL;
 }
 
 /*
@@ -4326,7 +4321,8 @@ void ExpandEscape(expand_T *xp, char_u *str, int numfiles, char_u **files, int o
 ///                    if true then it escapes for a shell command.
 ///
 /// @return [allocated] escaped file name.
-char *vim_strsave_fnameescape(const char *const fname, const bool shell)
+char *vim_strsave_fnameescape(const char *const fname,
+                              const bool shell FUNC_ATTR_UNUSED)
   FUNC_ATTR_NONNULL_RET FUNC_ATTR_MALLOC FUNC_ATTR_NONNULL_ALL
 {
 #ifdef BACKSLASH_IN_FILENAME
@@ -5397,7 +5393,7 @@ static void expand_shellcmd(char_u *filepat, int *num_file, char_u ***file,
 }
 
 /// Call "user_expand_func()" to invoke a user defined Vim script function and
-/// return the result (either a string or a List).
+/// return the result (either a string, a List or NULL).
 static void * call_user_expand_func(user_expand_func_T user_expand_func,
                                     expand_T *xp, int *num_file, char_u ***file)
   FUNC_ATTR_NONNULL_ALL

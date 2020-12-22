@@ -15,6 +15,7 @@
 #include "nvim/api/private/dispatch.h"
 #include "nvim/api/buffer.h"
 #include "nvim/api/window.h"
+#include "nvim/api/deprecated.h"
 #include "nvim/msgpack_rpc/channel.h"
 #include "nvim/msgpack_rpc/helpers.h"
 #include "nvim/lua/executor.h"
@@ -479,15 +480,6 @@ String nvim_replace_termcodes(String str, Boolean from_part, Boolean do_lt,
   return cstr_as_string(ptr);
 }
 
-/// @deprecated
-/// @see nvim_exec
-String nvim_command_output(String command, Error *err)
-  FUNC_API_SINCE(1)
-  FUNC_API_DEPRECATED_SINCE(7)
-{
-  return nvim_exec(command, true, err);
-}
-
 /// Evaluates a VimL |expression|.
 /// Dictionaries and Lists are recursively expanded.
 ///
@@ -532,16 +524,6 @@ Object nvim_eval(String expr, Error *err)
   });
 
   return rv;
-}
-
-/// @deprecated Use nvim_exec_lua() instead.
-/// @see nvim_exec_lua
-Object nvim_execute_lua(String code, Array args, Error *err)
-  FUNC_API_SINCE(3)
-  FUNC_API_DEPRECATED_SINCE(7)
-  FUNC_API_REMOTE_ONLY
-{
-  return nlua_exec(code, args, err);
 }
 
 /// Execute Lua code. Parameters (if any) are available as `...` inside the
@@ -875,6 +857,7 @@ String nvim_get_current_line(Error *err)
 /// @param[out] err Error details, if any
 void nvim_set_current_line(String line, Error *err)
   FUNC_API_SINCE(1)
+  FUNC_API_CHECK_TEXTLOCK
 {
   buffer_set_line(curbuf->handle, curwin->w_cursor.lnum - 1, line, err);
 }
@@ -884,6 +867,7 @@ void nvim_set_current_line(String line, Error *err)
 /// @param[out] err Error details, if any
 void nvim_del_current_line(Error *err)
   FUNC_API_SINCE(1)
+  FUNC_API_CHECK_TEXTLOCK
 {
   buffer_del_line(curbuf->handle, curwin->w_cursor.lnum - 1, err);
 }
@@ -920,23 +904,6 @@ void nvim_del_var(String name, Error *err)
   dict_set_var(&globvardict, name, NIL, true, false, err);
 }
 
-/// @deprecated
-/// @see nvim_set_var
-/// @warning May return nil if there was no previous value
-///          OR if previous value was `v:null`.
-/// @return Old value or nil if there was no previous value.
-Object vim_set_var(String name, Object value, Error *err)
-{
-  return dict_set_var(&globvardict, name, value, false, true, err);
-}
-
-/// @deprecated
-/// @see nvim_del_var
-Object vim_del_var(String name, Error *err)
-{
-  return dict_set_var(&globvardict, name, NIL, true, true, err);
-}
-
 /// Gets a v: variable.
 ///
 /// @param name     Variable name
@@ -968,6 +935,47 @@ Object nvim_get_option(String name, Error *err)
   FUNC_API_SINCE(1)
 {
   return get_option_from(NULL, SREQ_GLOBAL, name, err);
+}
+
+/// Gets the option information for all options.
+///
+/// The dictionary has the full option names as keys and option metadata
+/// dictionaries as detailed at |nvim_get_option_info|.
+///
+/// @return dictionary of all options
+Dictionary nvim_get_all_options_info(Error *err)
+  FUNC_API_SINCE(7)
+{
+  return get_all_vimoptions();
+}
+
+/// Gets the option information for one option
+///
+/// Resulting dictionary has keys:
+///     - name: Name of the option (like 'filetype')
+///     - shortname: Shortened name of the option (like 'ft')
+///     - type: type of option ("string", "integer" or "boolean")
+///     - default: The default value for the option
+///     - was_set: Whether the option was set.
+///
+///     - last_set_sid: Last set script id (if any)
+///     - last_set_linenr: line number where option was set
+///     - last_set_chan: Channel where option was set (0 for local)
+///
+///     - scope: one of "global", "win", or "buf"
+///     - global_local: whether win or buf option has a global value
+///
+///     - commalist: List of comma separated values
+///     - flaglist: List of single char flags
+///
+///
+/// @param          name Option name
+/// @param[out] err Error details, if any
+/// @return         Option Information
+Dictionary nvim_get_option_info(String name, Error *err)
+  FUNC_API_SINCE(7)
+{
+  return get_vimoption(name, err);
 }
 
 /// Sets an option value.
@@ -1054,6 +1062,7 @@ Buffer nvim_get_current_buf(void)
 /// @param[out] err Error details, if any
 void nvim_set_current_buf(Buffer buffer, Error *err)
   FUNC_API_SINCE(1)
+  FUNC_API_CHECK_TEXTLOCK
 {
   buf_T *buf = find_buffer_by_handle(buffer, err);
 
@@ -1108,6 +1117,7 @@ Window nvim_get_current_win(void)
 /// @param[out] err Error details, if any
 void nvim_set_current_win(Window window, Error *err)
   FUNC_API_SINCE(1)
+  FUNC_API_CHECK_TEXTLOCK
 {
   win_T *win = find_window_by_handle(window, err);
 
@@ -1257,6 +1267,7 @@ fail:
 Window nvim_open_win(Buffer buffer, Boolean enter, Dictionary config,
                      Error *err)
   FUNC_API_SINCE(6)
+  FUNC_API_CHECK_TEXTLOCK
 {
   FloatConfig fconfig = FLOAT_CONFIG_INIT;
   if (!parse_float_config(config, &fconfig, false, err)) {
@@ -1321,6 +1332,7 @@ Tabpage nvim_get_current_tabpage(void)
 /// @param[out] err Error details, if any
 void nvim_set_current_tabpage(Tabpage tabpage, Error *err)
   FUNC_API_SINCE(1)
+  FUNC_API_CHECK_TEXTLOCK
 {
   tabpage_T *tp = find_tab_by_handle(tabpage, err);
 
@@ -1405,6 +1417,7 @@ Dictionary nvim_get_namespaces(void)
 ///     - false: Client must cancel the paste.
 Boolean nvim_paste(String data, Boolean crlf, Integer phase, Error *err)
   FUNC_API_SINCE(6)
+  FUNC_API_CHECK_TEXTLOCK
 {
   static bool draining = false;
   bool cancel = false;
@@ -1477,6 +1490,7 @@ theend:
 void nvim_put(ArrayOf(String) lines, String type, Boolean after,
               Boolean follow, Error *err)
   FUNC_API_SINCE(6)
+  FUNC_API_CHECK_TEXTLOCK
 {
   yankreg_T *reg = xcalloc(sizeof(yankreg_T), 1);
   if (!prepare_yankreg_from_object(reg, type, lines.size)) {
