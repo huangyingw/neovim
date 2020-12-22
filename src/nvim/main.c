@@ -169,6 +169,14 @@ void early_init(mparm_T *paramp)
   init_normal_cmds();   // Init the table of Normal mode commands.
   highlight_init();
 
+#ifdef WIN32
+  OSVERSIONINFO ovi;
+  ovi.dwOSVersionInfoSize = sizeof(ovi);
+  GetVersionEx(&ovi);
+  snprintf(windowsVersion, sizeof(windowsVersion), "%d.%d",
+           (int)ovi.dwMajorVersion, (int)ovi.dwMinorVersion);
+#endif
+
 #if defined(HAVE_LOCALE_H)
   // Setup to use the current locale (for ctype() and many other things).
   // NOTE: Translated messages with encodings other than latin1 will not
@@ -654,7 +662,17 @@ void getout(int exitval)
   }
 
   if (v_dying <= 1) {
+    int unblock = 0;
+
+    // deathtrap() blocks autocommands, but we do want to trigger VimLeave.
+    if (is_autocmd_blocked()) {
+      unblock_autocmds();
+      unblock++;
+    }
     apply_autocmds(EVENT_VIMLEAVE, NULL, NULL, false, curbuf);
+    if (unblock) {
+      block_autocmds();
+    }
   }
 
   profile_dump();
@@ -1069,9 +1087,14 @@ static void command_line_scan(mparm_T *parmp)
               } else {
                 a = argv[0];
               }
-              size_t s_size = STRLEN(a) + 4;
+
+              size_t s_size = STRLEN(a) + 9;
               char *s = xmalloc(s_size);
-              snprintf(s, s_size, "so %s", a);
+              if (path_with_extension(a, "lua")) {
+                snprintf(s, s_size, "luafile %s", a);
+              } else {
+                snprintf(s, s_size, "so %s", a);
+              }
               parmp->cmds_tofree[parmp->n_commands] = true;
               parmp->commands[parmp->n_commands++] = s;
             } else {
@@ -1409,7 +1432,10 @@ static void read_stdin(void)
   no_wait_return = true;
   int save_msg_didany = msg_didany;
   set_buflisted(true);
-  (void)open_buffer(true, NULL, 0);  // create memfile and read file
+
+  // Create memfile and read from stdin.
+  (void)open_buffer(true, NULL, 0);
+
   if (BUFEMPTY() && curbuf->b_next != NULL) {
     // stdin was empty, go to buffer 2 (e.g. "echo file1 | xargs nvim"). #8561
     do_cmdline_cmd("silent! bnext");
@@ -1770,6 +1796,23 @@ static bool do_user_initialization(void)
     do_exrc = p_exrc;
     return do_exrc;
   }
+
+  char_u *init_lua_path = (char_u *)stdpaths_user_conf_subpath("init.lua");
+  if (os_path_exists(init_lua_path)
+      && nlua_exec_file((const char *)init_lua_path)) {
+    os_setenv("MYVIMRC", (const char *)init_lua_path, 1);
+    char_u *vimrc_path = (char_u *)stdpaths_user_conf_subpath("init.vim");
+
+    if (os_path_exists(vimrc_path)) {
+      EMSG3(_("Conflicting configs: \"%s\" \"%s\""), init_lua_path, vimrc_path);
+    }
+
+    xfree(vimrc_path);
+    xfree(init_lua_path);
+    return false;
+  }
+  xfree(init_lua_path);
+
   char_u *user_vimrc = (char_u *)stdpaths_user_conf_subpath("init.vim");
   if (do_source(user_vimrc, true, DOSO_VIMRC) != FAIL) {
     do_exrc = p_exrc;
@@ -1829,8 +1872,12 @@ static void source_startup_scripts(const mparm_T *const parmp)
         || strequal(parmp->use_vimrc, "NORC")) {
       // Do nothing.
     } else {
-      if (do_source((char_u *)parmp->use_vimrc, false, DOSO_NONE) != OK) {
-        EMSG2(_("E282: Cannot read from \"%s\""), parmp->use_vimrc);
+      if (path_with_extension(parmp->use_vimrc, "lua")) {
+        nlua_exec_file(parmp->use_vimrc);
+      } else {
+        if (do_source((char_u *)parmp->use_vimrc, false, DOSO_NONE) != OK) {
+          EMSG2(_("E282: Cannot read from \"%s\""), parmp->use_vimrc);
+        }
       }
     }
   } else if (!silent_mode) {

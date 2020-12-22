@@ -120,6 +120,63 @@ local function get_line_byte_from_position(bufnr, position)
   return col
 end
 
+--- Process and return progress reports from lsp server
+function M.get_progress_messages()
+
+  local new_messages = {}
+  local msg_remove = {}
+  local progress_remove = {}
+
+  for _, client in ipairs(vim.lsp.get_active_clients()) do
+      local messages = client.messages
+      local data = messages
+      for token, ctx in pairs(data.progress) do
+
+        local new_report = {
+          name = data.name,
+          title = ctx.title or "empty title",
+          message = ctx.message,
+          percentage = ctx.percentage,
+          progress = true,
+        }
+        table.insert(new_messages, new_report)
+
+        if ctx.done then
+          table.insert(progress_remove, {client = client, token = token})
+        end
+      end
+
+      for i, msg in ipairs(data.messages) do
+        if msg.show_once then
+          msg.shown = msg.shown + 1
+          if msg.shown > 1 then
+            table.insert(msg_remove, {client = client, idx = i})
+          end
+        end
+
+        table.insert(new_messages, {name = data.name, content = msg.content})
+      end
+
+      if next(data.status) ~= nil then
+        table.insert(new_messages, {
+          name = data.name,
+          content = data.status.content,
+          uri = data.status.uri,
+          status = true
+        })
+      end
+    for _, item in ipairs(msg_remove) do
+      table.remove(client.messages, item.idx)
+    end
+
+    for _, item in ipairs(progress_remove) do
+      client.messages.progress[item.token] = nil
+    end
+  end
+
+  return new_messages
+end
+
 --- Applies a list of text edits to a buffer.
 --@param text_edits (table) list of `TextEdit` objects
 --@param buf_nr (number) Buffer id
@@ -957,6 +1014,7 @@ function M.open_floating_preview(contents, filetype, opts)
   end
   api.nvim_buf_set_lines(floating_bufnr, 0, -1, true, contents)
   api.nvim_buf_set_option(floating_bufnr, 'modifiable', false)
+  api.nvim_buf_set_option(floating_bufnr, 'bufhidden', 'wipe')
   M.close_preview_autocmd({"CursorMoved", "CursorMovedI", "BufHidden", "BufLeave"}, floating_winnr)
   return floating_bufnr, floating_winnr
 end
@@ -1021,7 +1079,7 @@ do
 
   --@deprecated
   function M.buf_diagnostics_signs(bufnr, diagnostics, client_id)
-    warn_once("buf_diagnostics_signs is deprecated. Use 'vim.lsp.diagnostics.set_signs'")
+    warn_once("buf_diagnostics_signs is deprecated. Use 'vim.lsp.diagnostic.set_signs'")
     return vim.lsp.diagnostic.set_signs(diagnostics, bufnr, client_id)
   end
 
@@ -1314,6 +1372,9 @@ function M.make_text_document_params()
   return { uri = vim.uri_from_bufnr(0) }
 end
 
+--- Create the workspace params
+--@param added
+--@param removed
 function M.make_workspace_params(added, removed)
   return { event = { added = added; removed = removed; } }
 end

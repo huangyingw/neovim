@@ -1744,6 +1744,9 @@ au BufNewFile,BufRead *.tf,.tfrc,tfrc		setf tf
 " tmux configuration
 au BufNewFile,BufRead {.,}tmux*.conf		setf tmux
 
+" TOML
+au BufNewFile,BufRead *.toml			setf toml
+
 " TPP - Text Presentation Program
 au BufNewFile,BufReadPost *.tpp			setf tpp
 
@@ -1768,8 +1771,13 @@ au BufNewFile,BufReadPost *.tutor		setf tutor
 " TWIG files
 au BufNewFile,BufReadPost *.twig		setf twig
 
-" Typescript
-au BufNewFile,BufReadPost *.ts			setf typescript
+" Typescript or Qt translation file (which is XML)
+au BufNewFile,BufReadPost *.ts
+	\ if getline(1) =~ '<?xml' |
+	\   setf xml |
+	\ else |
+	\   setf typescript |
+	\ endif
 
 " TypeScript with React
 au BufNewFile,BufRead *.tsx			setf typescriptreact
