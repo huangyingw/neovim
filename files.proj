@@ -93,6 +93,7 @@
 "./man/nvim.1"
 "./prunefile.conf"
 "./prunefix.conf"
+"./readme"
 "./rsync.files"
 "./runtime/CMakeLists.txt"
 "./runtime/autoload/README.txt"
