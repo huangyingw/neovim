@@ -16,4 +16,5 @@
     remote = origin
     merge = refs/heads/dev
 [gdif]
+    ignore = ./readme
     ignore = install.sh
